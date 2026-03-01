@@ -1,78 +1,51 @@
-# import os
-# import sys
-# from firebase_admin import credentials, initialize_app, firestore
-
-# def get_base_path():
-#     """Get base path for PyInstaller or normal run."""
-#     if getattr(sys, 'frozen', False):
-#         return os.path.dirname(sys.executable)
-#     return os.path.dirname(os.path.abspath(__file__))
-
-# def find_service_key():
-#     base_path = get_base_path()
-
-#     possible_paths = [
-#         os.path.join(base_path, "serviceAccountKey.json"),
-#         os.path.join(base_path, "config", "serviceAccountKey.json"),
-#         os.path.join(os.getenv("APPDATA", ""), "ProsthesisSizer", "serviceAccountKey.json"),
-#         os.getenv("FIREBASE_KEY_PATH")
-#     ]
-
-#     for path in possible_paths:
-#         if path and os.path.exists(path):
-#             return path
-
-#     raise FileNotFoundError(
-#         "Firebase key not found.\n"
-#         "Place serviceAccountKey.json next to the EXE or in config folder."
-#     )
-
-# # 🔹 Load Firebase
-# key_path = find_service_key()
-# cred = credentials.Certificate(key_path)
-# initialize_app(cred)
-
-# db = firestore.client()
-
-# firebase_config.py
-
-import firebase_admin
-from firebase_admin import credentials, firestore
 import os
 import sys
+import firebase_admin
+from firebase_admin import credentials, firestore
 
-def get_firebase_key_path():
-    """Search for Firebase key in multiple secure locations."""
+def find_service_account_key():
+    """
+    Portable-first key detection:
+    1) Same folder as EXE (portable deployment)
+    2) config/ subfolder next to EXE
+    3) Environment variable FIREBASE_KEY_PATH (optional advanced)
+    4) Same folder as source code (development)
+    """
 
-    possible_paths = [
-        # 1️⃣ Same folder as EXE (portable mode)
-        os.path.join(os.path.dirname(sys.executable), "serviceAccountKey.json"),
+    paths = []
 
-        # 2️⃣ Project root (development mode)
-        os.path.join(os.path.dirname(__file__), "serviceAccountKey.json"),
+    # If running as a packaged EXE
+    if getattr(sys, "frozen", False):
+        exe_dir = os.path.dirname(sys.executable)
+        paths += [
+            os.path.join(exe_dir, "serviceAccountKey.json"),
+            os.path.join(exe_dir, "config", "serviceAccountKey.json"),
+        ]
 
-        # 3️⃣ Secure external location (your chosen path)
-        r"C:\Projects\Firebase Key\serviceAccountKey.json",
-    ]
+    # Optional: env var (advanced deployments)
+    env_path = os.getenv("FIREBASE_KEY_PATH")
+    if env_path:
+        paths.append(env_path)
 
-    for path in possible_paths:
-        if os.path.exists(path):
-            return path
+    # Development mode (running from Python)
+    src_dir = os.path.dirname(os.path.abspath(__file__))
+    paths.append(os.path.join(src_dir, "serviceAccountKey.json"))
+
+    for p in paths:
+        if p and os.path.exists(p):
+            return p
 
     raise FileNotFoundError(
-        "Firebase key not found. Place serviceAccountKey.json in:\n"
-        "- EXE folder\n"
-        "- Project folder\n"
-        "- C:\\Projects\\Firebase Key\\"
+        "Firebase key not found.\n\n"
+        "Portable setup:\n"
+        "- Place serviceAccountKey.json in the same folder as app.exe, OR\n"
+        "- Place it in a subfolder called config\\ next to app.exe.\n"
     )
 
-# Load Firebase
-try:
-    key_path = get_firebase_key_path()
-    cred = credentials.Certificate(key_path)
-    firebase_admin.initialize_app(cred)
-    db = firestore.client()
-    print(f"Firebase initialized using key at: {key_path}")
+key_path = find_service_account_key()
+cred = credentials.Certificate(key_path)
 
-except Exception as e:
-    raise RuntimeError(f"Firebase initialization failed: {e}")
+if not firebase_admin._apps:
+    firebase_admin.initialize_app(cred)
+
+db = firestore.client()
