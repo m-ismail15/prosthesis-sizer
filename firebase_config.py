@@ -1,50 +1,35 @@
 import os
 import sys
-import firebase_admin
-from firebase_admin import credentials, firestore
+from firebase_admin import credentials, initialize_app, firestore
 
-# --------------------------------------------------
-# 🔐 Locate Firebase service account key
-# --------------------------------------------------
-def get_key_path():
-    """
-    Returns the correct path to serviceAccountKey.json
-    Works for:
-    ✔ Running as Python script
-    ✔ Running as PyInstaller EXE
-    """
+def get_base_path():
+    """Get base path for PyInstaller or normal run."""
+    if getattr(sys, 'frozen', False):
+        return os.path.dirname(sys.executable)
+    return os.path.dirname(os.path.abspath(__file__))
 
-    # If running as bundled EXE
-    if getattr(sys, "frozen", False):
-        base_path = os.path.dirname(sys.executable)
-    else:
-        # Running as normal Python script
-        base_path = os.path.dirname(os.path.abspath(__file__))
+def find_service_key():
+    base_path = get_base_path()
 
-    return os.path.join(base_path, "serviceAccountKey.json")
+    possible_paths = [
+        os.path.join(base_path, "serviceAccountKey.json"),
+        os.path.join(base_path, "config", "serviceAccountKey.json"),
+        os.path.join(os.getenv("APPDATA", ""), "ProsthesisSizer", "serviceAccountKey.json"),
+        os.getenv("FIREBASE_KEY_PATH")
+    ]
 
+    for path in possible_paths:
+        if path and os.path.exists(path):
+            return path
 
-# --------------------------------------------------
-# 🔎 Resolve key path
-# --------------------------------------------------
-key_path = get_key_path()
-
-if not os.path.exists(key_path):
     raise FileNotFoundError(
-        f"Firebase key not found.\n"
-        f"Expected location:\n{key_path}\n\n"
-        f"Make sure 'serviceAccountKey.json' is in the same folder as the EXE."
+        "Firebase key not found.\n"
+        "Place serviceAccountKey.json next to the EXE or in config folder."
     )
 
-# --------------------------------------------------
-# 🚀 Initialize Firebase
-# --------------------------------------------------
-try:
-    if not firebase_admin._apps:
-        cred = credentials.Certificate(key_path)
-        firebase_admin.initialize_app(cred)
+# 🔹 Load Firebase
+key_path = find_service_key()
+cred = credentials.Certificate(key_path)
+initialize_app(cred)
 
-    db = firestore.client()
-
-except Exception as e:
-    raise RuntimeError(f"Failed to initialize Firebase: {e}")
+db = firestore.client()
