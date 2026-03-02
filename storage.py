@@ -1,9 +1,10 @@
 import json
 import os
-import sys
 import uuid
 from copy import deepcopy
 from datetime import datetime, timezone
+
+from app_paths import user_queue_dir
 
 
 # ---------------- STORAGE PRIMITIVES ---------------- #
@@ -19,15 +20,8 @@ class RecordSnapshot:
     def to_dict(self) -> dict:
         return deepcopy(self._data)
 
-
-def app_base_dir() -> str:
-    if getattr(sys, "frozen", False):
-        return os.path.dirname(sys.executable)
-    return os.path.dirname(os.path.abspath(__file__))
-
-
 def default_local_store_path() -> str:
-    return os.path.join(app_base_dir(), "data", "offline_records.json")
+    return os.path.join(user_queue_dir(), "offline_records.json")
 
 
 # ---------------- FIREBASE STORE ---------------- #

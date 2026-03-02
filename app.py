@@ -7,6 +7,8 @@ from PyQt6.QtWidgets import (QAbstractItemView, QApplication, QHBoxLayout, QHead
     QPushButton, QScrollArea, QStackedWidget, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
 )
 
+from app_paths import install_base_dir, user_config_dir
+from app_version import APP_VERSION
 from sizing import compute_prosthesis_size
 from storage import FirebaseStore, LocalJsonStore, StorageError, default_local_store_path
 
@@ -14,9 +16,7 @@ from storage import FirebaseStore, LocalJsonStore, StorageError, default_local_s
 # ---------------- RESOURCE HELPERS ---------------- #
 def resource_base_dir() -> str:
     """Base folder for resources in dev and in the packaged EXE."""
-    if getattr(sys, "frozen", False):
-        return os.path.dirname(sys.executable)
-    return os.path.dirname(os.path.abspath(__file__))
+    return install_base_dir()
 
 
 def resource_path(relative_path: str) -> str:
@@ -79,7 +79,8 @@ class LoginWindow(QWidget):
             )
         else:
             self.status_label.setText(
-                "Online mode is unavailable. Continue Offline will store records in a temporary local queue until online sync is available.\n\n"
+                "Online mode is unavailable. Continue Offline will store records in a temporary local queue until online sync is available.\n"
+                f"Online mode can use a Firebase key from {user_config_dir()}.\n\n"
                 f"Reason: {self.online_error}"
             )
 
@@ -169,7 +170,7 @@ class ProsthesisApp(QMainWindow):
         self.store = store
         self.role = role
         self.setWindowTitle(
-            f"Prosthesis Sizing App - {self.store.mode_name.title()} Mode - Role: {self.role}"
+            f"Prosthesis Sizing App v{APP_VERSION} - {self.store.mode_name.title()} Mode - Role: {self.role}"
         )
         self.setGeometry(100, 100, 900, 600)
 
@@ -212,6 +213,8 @@ class ProsthesisApp(QMainWindow):
                 " Pending records stay in a temporary local queue until they are synced online."
                 f" Queue file: {default_local_store_path()}"
             )
+        else:
+            mode_message += f" Firebase key search includes: {user_config_dir()}"
         self.statusBar().showMessage(mode_message)
 
     # ---------------- HOME PAGE ---------------- #

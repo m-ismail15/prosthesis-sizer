@@ -1,0 +1,95 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
+  <Product
+    Id="*"
+    Name="Prosthesis Sizing App"
+    Language="1033"
+    Version="$(var.Version)"
+    Manufacturer="MedTech"
+    UpgradeCode="2EA10A35-84E1-44B8-B639-78DC47D3217F">
+
+    <Package
+      InstallerVersion="500"
+      Compressed="yes"
+      InstallScope="perMachine"
+      Platform="x64" />
+
+    <MajorUpgrade
+      DowngradeErrorMessage="A newer version of Prosthesis Sizing App is already installed." />
+    <MediaTemplate EmbedCab="yes" />
+
+    <Icon Id="AppIcon.ico" SourceFile="$(var.ProjectRoot)\MedTechLogo.ico" />
+    <Property Id="ARPPRODUCTICON" Value="AppIcon.ico" />
+
+    <Directory Id="TARGETDIR" Name="SourceDir">
+      <Directory Id="ProgramFiles64Folder">
+        <Directory Id="ManufacturerFolder" Name="MedTech">
+          <Directory Id="INSTALLFOLDER" Name="Prosthesis Sizing App" />
+        </Directory>
+      </Directory>
+
+      <Directory Id="ProgramMenuFolder">
+        <Directory Id="ApplicationProgramsFolder" Name="Prosthesis Sizing App" />
+      </Directory>
+    </Directory>
+
+    <DirectoryRef Id="INSTALLFOLDER">
+      <Component Id="CmpAppExe" Guid="A77FE13A-3D65-4160-A9F2-123B83F1642B">
+        <File Id="FilAppExe" Source="$(var.StagingDir)\app.exe" KeyPath="yes" />
+      </Component>
+
+      <Component Id="CmpReadme" Guid="34E53155-8E79-4954-8860-88131D25DA15">
+        <File Id="FilReadme" Source="$(var.StagingDir)\README.txt" KeyPath="yes" />
+      </Component>
+
+      <Component Id="CmpIcon" Guid="E737FDC9-F82A-4FD4-B6D8-DCA3A8FA7B63">
+        <File Id="FilIcon" Source="$(var.StagingDir)\MedTechLogo.ico" KeyPath="yes" />
+      </Component>
+
+      <Directory Id="ImagesFolder" Name="images">
+        <Component Id="CmpImageAR" Guid="212D5A4A-07B2-4C76-B1B7-4EC4E0A40B6C">
+          <File Id="FilImageAR" Source="$(var.StagingDir)\images\ARLength.png" KeyPath="yes" />
+        </Component>
+        <Component Id="CmpImageBC" Guid="D0FB7F11-A3C8-4B03-98D2-3CEBAA486056">
+          <File Id="FilImageBC" Source="$(var.StagingDir)\images\BCFlexed.png" KeyPath="yes" />
+        </Component>
+        <Component Id="CmpImageFC" Guid="7EB90F41-9184-4D3B-BE79-3F504F2E6B3A">
+          <File Id="FilImageFC" Source="$(var.StagingDir)\images\FCFlexed.png" KeyPath="yes" />
+        </Component>
+        <Component Id="CmpImageRS" Guid="77B26992-9E4B-46B9-AB59-EEA78E30F724">
+          <File Id="FilImageRS" Source="$(var.StagingDir)\images\RSLength.png" KeyPath="yes" />
+        </Component>
+      </Directory>
+    </DirectoryRef>
+
+    <DirectoryRef Id="ApplicationProgramsFolder">
+      <Component Id="CmpShortcut" Guid="9C98468E-29F8-4386-BBF8-161EF989A46A">
+        <Shortcut
+          Id="StartMenuShortcut"
+          Name="Prosthesis Sizing App"
+          Description="Launch Prosthesis Sizing App"
+          Target="[INSTALLFOLDER]app.exe"
+          WorkingDirectory="INSTALLFOLDER" />
+        <RemoveFolder Id="RemoveProgramsFolder" On="uninstall" />
+        <RegistryValue
+          Root="HKCU"
+          Key="Software\MedTech\ProsthesisSizingApp"
+          Name="Installed"
+          Type="integer"
+          Value="1"
+          KeyPath="yes" />
+      </Component>
+    </DirectoryRef>
+
+    <Feature Id="ProductFeature" Title="Prosthesis Sizing App" Level="1">
+      <ComponentRef Id="CmpAppExe" />
+      <ComponentRef Id="CmpReadme" />
+      <ComponentRef Id="CmpIcon" />
+      <ComponentRef Id="CmpImageAR" />
+      <ComponentRef Id="CmpImageBC" />
+      <ComponentRef Id="CmpImageFC" />
+      <ComponentRef Id="CmpImageRS" />
+      <ComponentRef Id="CmpShortcut" />
+    </Feature>
+  </Product>
+</Wix>

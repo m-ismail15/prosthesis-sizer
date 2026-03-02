@@ -3,6 +3,7 @@ import sys
 
 import firebase_admin
 from firebase_admin import credentials, firestore
+from app_paths import install_base_dir, user_config_dir
 
 
 # ---------------- FIREBASE DISCOVERY ---------------- #
@@ -18,13 +19,15 @@ def find_service_account_key() -> str:
     paths = []
 
     if getattr(sys, "frozen", False):
-        exe_dir = os.path.dirname(sys.executable)
+        exe_dir = install_base_dir()
         paths.extend(
             [
                 os.path.join(exe_dir, "serviceAccountKey.json"),
                 os.path.join(exe_dir, "config", "serviceAccountKey.json"),
             ]
         )
+
+    paths.append(os.path.join(user_config_dir(), "serviceAccountKey.json"))
 
     env_path = os.getenv("FIREBASE_KEY_PATH")
     if env_path:
