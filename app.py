@@ -1,34 +1,52 @@
 # Desktop GUI
-import sys
 import os
-from PyQt6.QtWidgets import (
-    QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
-    QLabel, QLineEdit, QPushButton, QStackedWidget, QTableWidget,
-    QTableWidgetItem, QMessageBox, QScrollArea, QAbstractItemView, QHeaderView
+import sys
+
+from PyQt6.QtGui import QDoubleValidator, QPixmap
+from PyQt6.QtWidgets import (QAbstractItemView, QApplication, QHBoxLayout, QHeaderView, QLabel, QLineEdit, QMainWindow, QMessageBox,
+    QPushButton, QScrollArea, QStackedWidget, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
 )
-from PyQt6.QtGui import QPixmap, QDoubleValidator
-from firebase_config import db
-from firebase_admin import firestore as fb_firestore
+
 from sizing import compute_prosthesis_size
+from storage import FirebaseStore, LocalJsonStore, StorageError, default_local_store_path
+
 
 def resource_base_dir() -> str:
-    """Base folder for resources in dev (app.py folder) and in PyInstaller EXE (exe folder)."""
+    """Base folder for resources in dev and in the packaged EXE."""
     if getattr(sys, "frozen", False):
-        return os.path.dirname(sys.executable)   # folder containing app.exe
+        return os.path.dirname(sys.executable)
     return os.path.dirname(os.path.abspath(__file__))
 
+
 def resource_path(relative_path: str) -> str:
-    """Turn a relative path like 'images/ARLength.png' into an absolute path."""
     return os.path.join(resource_base_dir(), relative_path)
 
 
-# ---------------- LOGIN PAGE ---------------- #
 class LoginWindow(QWidget):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Login")
-        self.setGeometry(300, 200, 400, 200)
+        self.setGeometry(300, 200, 420, 240)
 
+        self.online_store = None
+        self.online_error = ""
+        self.offline_store = LocalJsonStore(default_local_store_path())
+
+        self._try_enable_online_mode()
+        self._build_ui()
+
+    def _try_enable_online_mode(self):
+        preferred_mode = os.getenv("PROSTHESIS_APP_MODE", "auto").strip().lower()
+        if preferred_mode == "offline":
+            self.online_error = "Offline mode forced by PROSTHESIS_APP_MODE=offline."
+            return
+
+        try:
+            self.online_store = FirebaseStore()
+        except Exception as exc:
+            self.online_error = str(exc)
+
+    def _build_ui(self):
         layout = QVBoxLayout()
 
         layout.addWidget(QLabel("Email:"))
@@ -41,61 +59,75 @@ class LoginWindow(QWidget):
         layout.addWidget(self.password_input)
 
         self.status_label = QLabel("")
+        self.status_label.setWordWrap(True)
         layout.addWidget(self.status_label)
 
-        login_btn = QPushButton("Login")
-        login_btn.clicked.connect(self.login)
+        login_btn = QPushButton("Login Online")
+        login_btn.clicked.connect(self.login_online)
         layout.addWidget(login_btn)
+
+        offline_btn = QPushButton("Continue Offline")
+        offline_btn.clicked.connect(self.open_offline_mode)
+        layout.addWidget(offline_btn)
+
+        if self.online_store is not None:
+            self.status_label.setText(
+                "Online mode is available. Continue Offline stores records on this device only."
+            )
+        else:
+            self.status_label.setText(
+                "Online mode is unavailable. Continue Offline will use local storage.\n\n"
+                f"Reason: {self.online_error}"
+            )
 
         self.setLayout(layout)
 
-    def login(self):
+    def login_online(self):
+        if self.online_store is None:
+            self.status_label.setText(
+                "Online mode is unavailable. Use Continue Offline to work locally."
+            )
+            return
+
         email = self.email_input.text().strip().lower()
         password = self.password_input.text().strip()
 
         if not email or not password:
-            self.status_label.setText("⚠ Please enter email and password")
+            self.status_label.setText("Please enter email and password.")
             return
 
         try:
-            users_ref = db.collection("Users")
-
-            # ✅ FIX: use positional args (works with google-cloud-firestore==2.21.0)
-            query = (
-                users_ref.where("email", "==", email)
-                         .where("password", "==", password)
-                         .limit(1)
-                         .stream()
+            role = self.online_store.authenticate(email, password)
+            if role:
+                self.open_main_app(self.online_store, role)
+            else:
+                self.status_label.setText("Invalid credentials.")
+        except Exception as exc:
+            self.status_label.setText(
+                "Could not log in online. Use Continue Offline to work locally.\n\n"
+                f"Reason: {exc}"
             )
 
-            user_doc = next(query, None)
+    def open_offline_mode(self):
+        try:
+            self.open_main_app(self.offline_store, "prosthetist")
+        except StorageError as exc:
+            QMessageBox.critical(self, "Offline Mode Error", str(exc))
 
-            if user_doc:
-                role = user_doc.to_dict().get("role", "prosthetist")
-                self.hide()
-                self.main_app = ProsthesisApp(role=role)
-                self.main_app.show()
-            else:
-                self.status_label.setText("❌ Invalid credentials")
-
-        
-        except Exception as e:
-            msg = str(e)
-            if "403" in msg or "insufficient permissions" in msg.lower():
-                self.status_label.setText(
-                    "Error: No permission to access Firestore.\n"
-                    "Ask admin to grant this service account IAM access."
-                )
-            else:
-                self.status_label.setText(f"Error: {e}")
+    def open_main_app(self, store, role: str):
+        self.hide()
+        self.main_app = ProsthesisApp(store=store, role=role)
+        self.main_app.show()
 
 
-# ---------------- MAIN APP ---------------- #
 class ProsthesisApp(QMainWindow):
-    def __init__(self, role="prosthetist"):
+    def __init__(self, store, role: str = "prosthetist"):
         super().__init__()
+        self.store = store
         self.role = role
-        self.setWindowTitle(f"Prosthesis Sizing App - Role: {self.role}")
+        self.setWindowTitle(
+            f"Prosthesis Sizing App - {self.store.mode_name.title()} Mode - Role: {self.role}"
+        )
         self.setGeometry(100, 100, 900, 600)
 
         self.stack = QStackedWidget()
@@ -109,14 +141,13 @@ class ProsthesisApp(QMainWindow):
         self.stack.addWidget(self.records_page)
         self.stack.addWidget(self.guide_page)
 
-        # Navigation
         nav = QWidget()
         nav_layout = QHBoxLayout()
         nav.setLayout(nav_layout)
 
-        home_btn = QPushButton("🏠 Home")
-        records_btn = QPushButton("📋 Records")
-        guide_btn = QPushButton("📖 Measurement Guide")
+        home_btn = QPushButton("Home")
+        records_btn = QPushButton("Records")
+        guide_btn = QPushButton("Measurement Guide")
 
         home_btn.clicked.connect(lambda: self.stack.setCurrentWidget(self.home_page))
 
@@ -132,7 +163,11 @@ class ProsthesisApp(QMainWindow):
         nav_layout.addWidget(guide_btn)
         self.addToolBar("Navigation").addWidget(nav)
 
-    # ---------------- HOME PAGE ---------------- #
+        mode_message = f"Running in {self.store.mode_name} mode."
+        if self.store.mode_name == "offline":
+            mode_message += f" Local data file: {default_local_store_path()}"
+        self.statusBar().showMessage(mode_message)
+
     def build_home(self):
         page = QWidget()
         layout = QVBoxLayout()
@@ -149,7 +184,12 @@ class ProsthesisApp(QMainWindow):
         self.residuum_input = QLineEdit()
 
         validator = QDoubleValidator(0.0, 10000.0, 2, parent=self)
-        for field in [self.bicep_input, self.forearm_input, self.humerus_input, self.residuum_input]:
+        for field in [
+            self.bicep_input,
+            self.forearm_input,
+            self.humerus_input,
+            self.residuum_input,
+        ]:
             field.setValidator(validator)
 
         layout.addWidget(QLabel("Flexed Bicep Circumference (mm):"))
@@ -173,6 +213,9 @@ class ProsthesisApp(QMainWindow):
 
     def save_patient_data(self):
         name = self.name_input.text().strip()
+        if not name:
+            QMessageBox.warning(self, "Missing Name", "Please enter the patient name.")
+            return
 
         try:
             bc = float(self.bicep_input.text())
@@ -196,11 +239,13 @@ class ProsthesisApp(QMainWindow):
             "humeral_length": result["humeral_length"],
             "radial_length": result["radial_length"],
             "sizing_note": result["message"],
-            "created_at": fb_firestore.SERVER_TIMESTAMP,
-            "updated_at": fb_firestore.SERVER_TIMESTAMP
         }
 
-        db.collection("prosthesis_records").add(payload)
+        try:
+            self.store.save_record(payload)
+        except Exception as exc:
+            QMessageBox.critical(self, "Save Failed", str(exc))
+            return
 
         QMessageBox.information(
             self,
@@ -211,7 +256,6 @@ class ProsthesisApp(QMainWindow):
             f"{result['message']}"
         )
 
-    # ---------------- RECORDS PAGE ---------------- #
     def build_records(self):
         page = QWidget()
         layout = QVBoxLayout()
@@ -229,9 +273,9 @@ class ProsthesisApp(QMainWindow):
 
         self.table = QTableWidget()
         self.table.setColumnCount(8)
-        self.table.setHorizontalHeaderLabels([
-            "ID", "Name", "BC", "FC", "Width", "Hum Len", "Rad Len", "Note"
-        ])
+        self.table.setHorizontalHeaderLabels(
+            ["ID", "Name", "BC", "FC", "Width", "Hum Len", "Rad Len", "Note"]
+        )
         self.table.setColumnHidden(0, True)
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
@@ -243,69 +287,70 @@ class ProsthesisApp(QMainWindow):
         return page
 
     def load_records(self):
-        docs = list(db.collection("prosthesis_records").stream())
-        self.display_records(docs)
+        try:
+            self.display_records(self.store.list_records())
+        except Exception as exc:
+            QMessageBox.critical(self, "Load Failed", str(exc))
 
     def search_records(self):
         text = self.search_input.text().strip().lower()
-        if not text:
-            self.load_records()
-            return
-
-        docs = list(db.collection("prosthesis_records").stream())
-        filtered = [d for d in docs if text in d.to_dict().get("name_lower", "")]
-        self.display_records(filtered)
+        try:
+            records = self.store.search_records(text)
+            self.display_records(records)
+        except Exception as exc:
+            QMessageBox.critical(self, "Search Failed", str(exc))
 
     def display_records(self, records):
         self.table.setRowCount(0)
-        for i, rec in enumerate(records):
-            data = rec.to_dict()
-            self.table.insertRow(i)
-            self.table.setItem(i, 0, QTableWidgetItem(rec.id))
-            self.table.setItem(i, 1, QTableWidgetItem(data.get("name", "")))
-            self.table.setItem(i, 2, QTableWidgetItem(str(data.get("bicep_circ", ""))))
-            self.table.setItem(i, 3, QTableWidgetItem(str(data.get("forearm_circ", ""))))
-            self.table.setItem(i, 4, QTableWidgetItem(str(data.get("width_size", ""))))
-            self.table.setItem(i, 5, QTableWidgetItem(str(data.get("humeral_length", ""))))
-            self.table.setItem(i, 6, QTableWidgetItem(str(data.get("radial_length", ""))))
-            self.table.setItem(i, 7, QTableWidgetItem(data.get("sizing_note", "")))
-
-    # ---------------- GUIDE PAGE ---------------- #
-    # def build_measurement_guide(self):
-    #     scroll = QScrollArea()
-    #     layout = QVBoxLayout()
-
-    #     guide = [
-    #         ("Acromion-radiale (AR) Length", "Measure length from acromion to radial head.", "images/ARLength.png"),
-    #         ("Bicep Circumference", "Measure max circumference while flexed.", "images/BCFlexed.png"),
-    #         ("Radiale-Stylion (RS) Length", "Measure length from radial head to styloid process.", "images/RSLength.png"),
-    #         ("Forearm Circumference", "Measure 1/3 distal forearm.", "images/FCFlexed.png"),
-    #     ]
-
-    #     for title, desc, path in guide:
-    #         layout.addWidget(QLabel(f"<b>{title}</b>"))
-    #         layout.addWidget(QLabel(desc))
-    #         if os.path.exists(path):
-    #             pixmap = QPixmap(path)
-    #             label = QLabel()
-    #             label.setPixmap(pixmap.scaledToWidth(300))
-    #             layout.addWidget(label)
-
-    #     container = QWidget()
-    #     container.setLayout(layout)
-    #     scroll.setWidget(container)
-    #     scroll.setWidgetResizable(True)
-    #     return scroll
+        for row_index, record in enumerate(records):
+            data = record.to_dict()
+            self.table.insertRow(row_index)
+            self.table.setItem(row_index, 0, QTableWidgetItem(record.id))
+            self.table.setItem(row_index, 1, QTableWidgetItem(data.get("name", "")))
+            self.table.setItem(
+                row_index, 2, QTableWidgetItem(str(data.get("bicep_circ", "")))
+            )
+            self.table.setItem(
+                row_index, 3, QTableWidgetItem(str(data.get("forearm_circ", "")))
+            )
+            self.table.setItem(
+                row_index, 4, QTableWidgetItem(str(data.get("width_size", "")))
+            )
+            self.table.setItem(
+                row_index, 5, QTableWidgetItem(str(data.get("humeral_length", "")))
+            )
+            self.table.setItem(
+                row_index, 6, QTableWidgetItem(str(data.get("radial_length", "")))
+            )
+            self.table.setItem(
+                row_index, 7, QTableWidgetItem(data.get("sizing_note", ""))
+            )
 
     def build_measurement_guide(self):
         scroll = QScrollArea()
         layout = QVBoxLayout()
 
         guide = [
-            ("Acromion-radiale (AR) Length", "Measure length from acromion to radial head.", "images/ARLength.png"),
-            ("Bicep Circumference", "Measure max circumference while flexed.", "images/BCFlexed.png"),
-            ("Radiale-Stylion (RS) Length", "Measure length from radial head to styloid process.", "images/RSLength.png"),
-            ("Forearm Circumference", "Measure 1/3 distal forearm.", "images/FCFlexed.png"),
+            (
+                "Acromion-radiale (AR) Length",
+                "Measure length from acromion to radial head.",
+                "images/ARLength.png",
+            ),
+            (
+                "Bicep Circumference",
+                "Measure max circumference while flexed.",
+                "images/BCFlexed.png",
+            ),
+            (
+                "Radiale-Stylion (RS) Length",
+                "Measure length from radial head to styloid process.",
+                "images/RSLength.png",
+            ),
+            (
+                "Forearm Circumference",
+                "Measure 1/3 distal forearm.",
+                "images/FCFlexed.png",
+            ),
         ]
 
         for title, desc, rel_path in guide:
@@ -313,7 +358,6 @@ class ProsthesisApp(QMainWindow):
             layout.addWidget(QLabel(desc))
 
             abs_path = resource_path(rel_path)
-
             if os.path.exists(abs_path):
                 pixmap = QPixmap(abs_path)
                 if not pixmap.isNull():
@@ -321,16 +365,17 @@ class ProsthesisApp(QMainWindow):
                     label.setPixmap(pixmap.scaledToWidth(300))
                     layout.addWidget(label)
                 else:
-                    layout.addWidget(QLabel(f"⚠ Could not load image: {rel_path}"))
+                    layout.addWidget(QLabel(f"Could not load image: {rel_path}"))
             else:
-                layout.addWidget(QLabel(f"⚠ Image not found: {rel_path}"))
+                layout.addWidget(QLabel(f"Image not found: {rel_path}"))
 
         container = QWidget()
         container.setLayout(layout)
         scroll.setWidget(container)
         scroll.setWidgetResizable(True)
         return scroll
-# ---------------- RUN APP ---------------- #
+
+
 if __name__ == "__main__":
     app = QApplication(sys.argv)
     login = LoginWindow()
