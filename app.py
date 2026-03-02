@@ -7,10 +7,20 @@ from PyQt6.QtWidgets import (
     QTableWidgetItem, QMessageBox, QScrollArea, QAbstractItemView, QHeaderView
 )
 from PyQt6.QtGui import QPixmap, QDoubleValidator
-from google.protobuf.timestamp_pb2 import Timestamp
 from firebase_config import db
 from firebase_admin import firestore as fb_firestore
 from sizing import compute_prosthesis_size
+
+def resource_base_dir() -> str:
+    """Base folder for resources in dev (app.py folder) and in PyInstaller EXE (exe folder)."""
+    if getattr(sys, "frozen", False):
+        return os.path.dirname(sys.executable)   # folder containing app.exe
+    return os.path.dirname(os.path.abspath(__file__))
+
+def resource_path(relative_path: str) -> str:
+    """Turn a relative path like 'images/ARLength.png' into an absolute path."""
+    return os.path.join(resource_base_dir(), relative_path)
+
 
 # ---------------- LOGIN PAGE ---------------- #
 class LoginWindow(QWidget):
@@ -49,8 +59,15 @@ class LoginWindow(QWidget):
 
         try:
             users_ref = db.collection("Users")
-            query = users_ref.where(filter=("email", "==", email))\
-                             .where(filter=("password", "==", password)).stream()
+
+            # ✅ FIX: use positional args (works with google-cloud-firestore==2.21.0)
+            query = (
+                users_ref.where("email", "==", email)
+                         .where("password", "==", password)
+                         .limit(1)
+                         .stream()
+            )
+
             user_doc = next(query, None)
 
             if user_doc:
@@ -61,12 +78,19 @@ class LoginWindow(QWidget):
             else:
                 self.status_label.setText("❌ Invalid credentials")
 
+        
         except Exception as e:
-            self.status_label.setText(f"Error: {e}")
+            msg = str(e)
+            if "403" in msg or "insufficient permissions" in msg.lower():
+                self.status_label.setText(
+                    "Error: No permission to access Firestore.\n"
+                    "Ask admin to grant this service account IAM access."
+                )
+            else:
+                self.status_label.setText(f"Error: {e}")
 
 
 # ---------------- MAIN APP ---------------- #
-
 class ProsthesisApp(QMainWindow):
     def __init__(self, role="prosthetist"):
         super().__init__()
@@ -247,31 +271,65 @@ class ProsthesisApp(QMainWindow):
             self.table.setItem(i, 7, QTableWidgetItem(data.get("sizing_note", "")))
 
     # ---------------- GUIDE PAGE ---------------- #
+    # def build_measurement_guide(self):
+    #     scroll = QScrollArea()
+    #     layout = QVBoxLayout()
+
+    #     guide = [
+    #         ("Acromion-radiale (AR) Length", "Measure length from acromion to radial head.", "images/ARLength.png"),
+    #         ("Bicep Circumference", "Measure max circumference while flexed.", "images/BCFlexed.png"),
+    #         ("Radiale-Stylion (RS) Length", "Measure length from radial head to styloid process.", "images/RSLength.png"),
+    #         ("Forearm Circumference", "Measure 1/3 distal forearm.", "images/FCFlexed.png"),
+    #     ]
+
+    #     for title, desc, path in guide:
+    #         layout.addWidget(QLabel(f"<b>{title}</b>"))
+    #         layout.addWidget(QLabel(desc))
+    #         if os.path.exists(path):
+    #             pixmap = QPixmap(path)
+    #             label = QLabel()
+    #             label.setPixmap(pixmap.scaledToWidth(300))
+    #             layout.addWidget(label)
+
+    #     container = QWidget()
+    #     container.setLayout(layout)
+    #     scroll.setWidget(container)
+    #     scroll.setWidgetResizable(True)
+    #     return scroll
+
     def build_measurement_guide(self):
         scroll = QScrollArea()
         layout = QVBoxLayout()
 
         guide = [
-            ("Bicep Circumference", "Measure max circumference while flexed.", "images/bicep.png"),
-            ("Forearm Circumference", "Measure 1/3 distal forearm.", "images/forearm.png"),
+            ("Acromion-radiale (AR) Length", "Measure length from acromion to radial head.", "images/ARLength.png"),
+            ("Bicep Circumference", "Measure max circumference while flexed.", "images/BCFlexed.png"),
+            ("Radiale-Stylion (RS) Length", "Measure length from radial head to styloid process.", "images/RSLength.png"),
+            ("Forearm Circumference", "Measure 1/3 distal forearm.", "images/FCFlexed.png"),
         ]
 
-        for title, desc, path in guide:
+        for title, desc, rel_path in guide:
             layout.addWidget(QLabel(f"<b>{title}</b>"))
             layout.addWidget(QLabel(desc))
-            if os.path.exists(path):
-                pixmap = QPixmap(path)
-                label = QLabel()
-                label.setPixmap(pixmap.scaledToWidth(300))
-                layout.addWidget(label)
+
+            abs_path = resource_path(rel_path)
+
+            if os.path.exists(abs_path):
+                pixmap = QPixmap(abs_path)
+                if not pixmap.isNull():
+                    label = QLabel()
+                    label.setPixmap(pixmap.scaledToWidth(300))
+                    layout.addWidget(label)
+                else:
+                    layout.addWidget(QLabel(f"⚠ Could not load image: {rel_path}"))
+            else:
+                layout.addWidget(QLabel(f"⚠ Image not found: {rel_path}"))
 
         container = QWidget()
         container.setLayout(layout)
         scroll.setWidget(container)
         scroll.setWidgetResizable(True)
         return scroll
-
-
 # ---------------- RUN APP ---------------- #
 if __name__ == "__main__":
     app = QApplication(sys.argv)
