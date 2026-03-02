@@ -54,13 +54,14 @@ class FirebaseStore:
 
         return user_doc.to_dict().get("role", "prosthetist")
 
-    def save_record(self, payload: dict) -> None:
+    def save_record(self, payload: dict) -> str:
         from firebase_admin import firestore as fb_firestore
 
         record = dict(payload)
         record["created_at"] = fb_firestore.SERVER_TIMESTAMP
         record["updated_at"] = fb_firestore.SERVER_TIMESTAMP
-        self.db.collection("prosthesis_records").add(record)
+        _, doc_ref = self.db.collection("prosthesis_records").add(record)
+        return doc_ref.id
 
     def list_records(self):
         return list(self.db.collection("prosthesis_records").stream())
@@ -85,7 +86,7 @@ class LocalJsonStore:
         # Offline mode is intentionally credential-free.
         return "prosthetist"
 
-    def save_record(self, payload: dict) -> None:
+    def save_record(self, payload: dict) -> str:
         data = self._read_data()
         timestamp = datetime.now(timezone.utc).isoformat()
 
@@ -95,9 +96,13 @@ class LocalJsonStore:
         record["id"] = record_id
         record["created_at"] = timestamp
         record["updated_at"] = timestamp
+        record["synced_to_online"] = False
+        record["synced_at"] = None
+        record["online_record_id"] = None
 
         data["prosthesis_records"].append(record)
         self._write_data(data)
+        return record_id
 
     def list_records(self):
         data = self._read_data()
@@ -118,6 +123,62 @@ class LocalJsonStore:
             for record in self.list_records()
             if text in record.to_dict().get("name_lower", "")
         ]
+
+    def sync_pending_records(self, online_store: FirebaseStore) -> dict:
+        data = self._read_data()
+        pending_records = [
+            record
+            for record in data["prosthesis_records"]
+            if not record.get("synced_to_online", False)
+        ]
+
+        result = {
+            "pending_count": len(pending_records),
+            "synced_count": 0,
+            "failed_count": 0,
+            "errors": [],
+        }
+
+        if not pending_records:
+            return result
+
+        sync_timestamp = datetime.now(timezone.utc).isoformat()
+
+        for record in pending_records:
+            try:
+                online_record_id = online_store.save_record(
+                    self._build_online_payload(record)
+                )
+            except Exception as exc:
+                result["failed_count"] += 1
+                result["errors"].append(f"{record.get('name', 'Unknown')}: {exc}")
+                continue
+
+            record["synced_to_online"] = True
+            record["synced_at"] = sync_timestamp
+            record["online_record_id"] = online_record_id
+            result["synced_count"] += 1
+
+        self._write_data(data)
+        return result
+
+    def _build_online_payload(self, record: dict) -> dict:
+        return {
+            "name": record.get("name", ""),
+            "name_lower": record.get("name_lower", ""),
+            "bicep_circ": record.get("bicep_circ"),
+            "forearm_circ": record.get("forearm_circ"),
+            "humerus_len": record.get("humerus_len"),
+            "residuum_len": record.get("residuum_len"),
+            "width_size": record.get("width_size"),
+            "humeral_length": record.get("humeral_length"),
+            "radial_length": record.get("radial_length"),
+            "sizing_note": record.get("sizing_note", ""),
+            "source_mode": "offline_sync",
+            "offline_record_id": record.get("id"),
+            "offline_created_at": record.get("created_at"),
+            "offline_updated_at": record.get("updated_at"),
+        }
 
     def _read_data(self) -> dict:
         if not os.path.exists(self.file_path):

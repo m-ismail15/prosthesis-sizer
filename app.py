@@ -102,7 +102,9 @@ class LoginWindow(QWidget):
         try:
             role = self.online_store.authenticate(email, password)
             if role:
+                sync_result = self.sync_offline_records()
                 self.open_main_app(self.online_store, role)
+                self.show_sync_result(sync_result)
             else:
                 self.status_label.setText("Invalid credentials.")
         except Exception as exc:
@@ -116,6 +118,43 @@ class LoginWindow(QWidget):
             self.open_main_app(self.offline_store, "prosthetist")
         except StorageError as exc:
             QMessageBox.critical(self, "Offline Mode Error", str(exc))
+
+    def sync_offline_records(self) -> dict | None:
+        try:
+            return self.offline_store.sync_pending_records(self.online_store)
+        except StorageError as exc:
+            return {
+                "pending_count": 0,
+                "synced_count": 0,
+                "failed_count": 1,
+                "errors": [str(exc)],
+            }
+
+    def show_sync_result(self, sync_result: dict | None):
+        if not sync_result:
+            return
+
+        if sync_result["pending_count"] == 0:
+            return
+
+        if sync_result["failed_count"] == 0:
+            QMessageBox.information(
+                self.main_app,
+                "Offline Sync Complete",
+                f"Synced {sync_result['synced_count']} offline record(s) to online storage.",
+            )
+            return
+
+        error_text = "\n".join(sync_result["errors"][:3])
+        if len(sync_result["errors"]) > 3:
+            error_text += "\n..."
+
+        QMessageBox.warning(
+            self.main_app,
+            "Offline Sync Incomplete",
+            f"Synced {sync_result['synced_count']} of {sync_result['pending_count']} "
+            f"offline record(s).\n\n{error_text}",
+        )
 
     def open_main_app(self, store, role: str):
         self.hide()
