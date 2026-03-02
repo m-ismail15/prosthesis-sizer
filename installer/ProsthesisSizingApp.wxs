@@ -34,33 +34,33 @@
     </Directory>
 
     <DirectoryRef Id="INSTALLFOLDER">
-      <Component Id="CmpAppExe" Guid="A77FE13A-3D65-4160-A9F2-123B83F1642B">
+      <Component Id="CmpAppExe" Guid="A77FE13A-3D65-4160-A9F2-123B83F1642B" Win64="yes">
         <File Id="FilAppExe" Source="$(var.StagingDir)\app.exe" KeyPath="yes" />
       </Component>
 
-      <Component Id="CmpReadme" Guid="34E53155-8E79-4954-8860-88131D25DA15">
+      <Component Id="CmpReadme" Guid="34E53155-8E79-4954-8860-88131D25DA15" Win64="yes">
         <File Id="FilReadme" Source="$(var.StagingDir)\README.txt" KeyPath="yes" />
       </Component>
 
-      <Component Id="CmpInstallGuide" Guid="2C945794-8A56-4108-B4CD-02B7D40F1CBF">
+      <Component Id="CmpInstallGuide" Guid="2C945794-8A56-4108-B4CD-02B7D40F1CBF" Win64="yes">
         <File Id="FilInstallGuide" Source="$(var.StagingDir)\INSTALL.txt" KeyPath="yes" />
       </Component>
 
-      <Component Id="CmpIcon" Guid="E737FDC9-F82A-4FD4-B6D8-DCA3A8FA7B63">
+      <Component Id="CmpIcon" Guid="E737FDC9-F82A-4FD4-B6D8-DCA3A8FA7B63" Win64="yes">
         <File Id="FilIcon" Source="$(var.StagingDir)\MedTechLogo.ico" KeyPath="yes" />
       </Component>
 
       <Directory Id="ImagesFolder" Name="images">
-        <Component Id="CmpImageAR" Guid="212D5A4A-07B2-4C76-B1B7-4EC4E0A40B6C">
+        <Component Id="CmpImageAR" Guid="212D5A4A-07B2-4C76-B1B7-4EC4E0A40B6C" Win64="yes">
           <File Id="FilImageAR" Source="$(var.StagingDir)\images\ARLength.png" KeyPath="yes" />
         </Component>
-        <Component Id="CmpImageBC" Guid="D0FB7F11-A3C8-4B03-98D2-3CEBAA486056">
+        <Component Id="CmpImageBC" Guid="D0FB7F11-A3C8-4B03-98D2-3CEBAA486056" Win64="yes">
           <File Id="FilImageBC" Source="$(var.StagingDir)\images\BCFlexed.png" KeyPath="yes" />
         </Component>
-        <Component Id="CmpImageFC" Guid="7EB90F41-9184-4D3B-BE79-3F504F2E6B3A">
+        <Component Id="CmpImageFC" Guid="7EB90F41-9184-4D3B-BE79-3F504F2E6B3A" Win64="yes">
           <File Id="FilImageFC" Source="$(var.StagingDir)\images\FCFlexed.png" KeyPath="yes" />
         </Component>
-        <Component Id="CmpImageRS" Guid="77B26992-9E4B-46B9-AB59-EEA78E30F724">
+        <Component Id="CmpImageRS" Guid="77B26992-9E4B-46B9-AB59-EEA78E30F724" Win64="yes">
           <File Id="FilImageRS" Source="$(var.StagingDir)\images\RSLength.png" KeyPath="yes" />
         </Component>
       </Directory>
