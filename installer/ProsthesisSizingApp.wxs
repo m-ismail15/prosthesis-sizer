@@ -42,6 +42,10 @@
         <File Id="FilReadme" Source="$(var.StagingDir)\README.txt" KeyPath="yes" />
       </Component>
 
+      <Component Id="CmpInstallGuide" Guid="2C945794-8A56-4108-B4CD-02B7D40F1CBF">
+        <File Id="FilInstallGuide" Source="$(var.StagingDir)\INSTALL.txt" KeyPath="yes" />
+      </Component>
+
       <Component Id="CmpIcon" Guid="E737FDC9-F82A-4FD4-B6D8-DCA3A8FA7B63">
         <File Id="FilIcon" Source="$(var.StagingDir)\MedTechLogo.ico" KeyPath="yes" />
       </Component>
@@ -84,6 +88,7 @@
     <Feature Id="ProductFeature" Title="Prosthesis Sizing App" Level="1">
       <ComponentRef Id="CmpAppExe" />
       <ComponentRef Id="CmpReadme" />
+      <ComponentRef Id="CmpInstallGuide" />
       <ComponentRef Id="CmpIcon" />
       <ComponentRef Id="CmpImageAR" />
       <ComponentRef Id="CmpImageBC" />

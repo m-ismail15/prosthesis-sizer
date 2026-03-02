@@ -16,10 +16,11 @@ $VersionSource = Join-Path $ProjectRoot "app_version.py"
 $AppExe = Join-Path $DistDir "app.exe"
 $ImagesDir = Join-Path $ProjectRoot "images"
 $ReadmeSource = Join-Path $ProjectRoot "README.md"
+$InstallGuideSource = Join-Path $ProjectRoot "INSTALL.txt"
 $IconSource = Join-Path $ProjectRoot "MedTechLogo.ico"
 
 # ---------------- VALIDATION ---------------- #
-foreach ($RequiredPath in @($ImagesDir, $ReadmeSource, $IconSource, $InstallerSource, $VersionSource)) {
+foreach ($RequiredPath in @($ImagesDir, $ReadmeSource, $InstallGuideSource, $IconSource, $InstallerSource, $VersionSource)) {
     if (-not (Test-Path $RequiredPath)) {
         throw "Required installer input not found: $RequiredPath"
     }
@@ -50,6 +51,7 @@ New-Item -ItemType Directory -Path $OutputDir -Force | Out-Null
 Copy-Item $AppExe (Join-Path $StagingDir "app.exe")
 Copy-Item $IconSource (Join-Path $StagingDir "MedTechLogo.ico")
 Copy-Item $ReadmeSource (Join-Path $StagingDir "README.txt")
+Copy-Item $InstallGuideSource (Join-Path $StagingDir "INSTALL.txt")
 Copy-Item (Join-Path $ImagesDir "*") (Join-Path $StagingDir "images") -Recurse
 
 # ---------------- WIX DISCOVERY ---------------- #

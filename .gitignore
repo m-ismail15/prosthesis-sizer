@@ -1,8 +1,11 @@
 venv/
 __pycache__/
 *.pyc
-dist/
 build/
-*.spec
+dist/
 *.exe
+*.wixobj
+*.wixpdb
 serviceAccountKey.json
+data/
+user_data/

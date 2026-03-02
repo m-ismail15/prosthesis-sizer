@@ -9,6 +9,7 @@ $ProjectRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $SpecFile = Join-Path $ProjectRoot "app.spec"
 $SourceImagesDir = Join-Path $ProjectRoot "images"
 $ReadmeSource = Join-Path $ProjectRoot "README.md"
+$InstallGuideSource = Join-Path $ProjectRoot "INSTALL.txt"
 $VersionSource = Join-Path $ProjectRoot "app_version.py"
 $DistDir = Join-Path $ProjectRoot "dist"
 $DistImagesDir = Join-Path $DistDir "images"
@@ -16,7 +17,7 @@ $DistDataDir = Join-Path $DistDir "data"
 $DistConfigDir = Join-Path $DistDir "config"
 
 # ---------------- VALIDATION ---------------- #
-foreach ($RequiredPath in @($SpecFile, $SourceImagesDir, $ReadmeSource, $VersionSource)) {
+foreach ($RequiredPath in @($SpecFile, $SourceImagesDir, $ReadmeSource, $InstallGuideSource, $VersionSource)) {
     if (-not (Test-Path $RequiredPath)) {
         throw "Required build input not found: $RequiredPath"
     }
@@ -57,6 +58,7 @@ New-Item -ItemType Directory -Path $DistConfigDir -Force | Out-Null
 
 Copy-Item (Join-Path $SourceImagesDir "*") $DistImagesDir -Recurse -Force
 Copy-Item $ReadmeSource (Join-Path $DistDir "README.txt") -Force
+Copy-Item $InstallGuideSource (Join-Path $DistDir "INSTALL.txt") -Force
 
 if (-not (Test-Path (Join-Path $DistDataDir "offline_records.json"))) {
     '{ "prosthesis_records": [] }' | Set-Content -Path (Join-Path $DistDataDir "offline_records.json") -Encoding UTF8

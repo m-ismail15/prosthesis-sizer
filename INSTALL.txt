@@ -1,0 +1,27 @@
+PROSTHESIS SIZING APP
+Installation Instructions
+=========================
+
+Files included:
+- ProsthesisSizingApp_1.0.0.msi
+- serviceAccountKey.json (only if online mode is required)
+
+INSTALLATION
+1. Double-click `ProsthesisSizingApp_1.0.0.msi`
+2. Follow the installer prompts
+3. Open `Prosthesis Sizing App` from the Start Menu
+
+OFFLINE USE
+- Launch the app
+- Select `Continue Offline`
+
+ONLINE USE
+1. Create this folder if it does not already exist:
+   %LOCALAPPDATA%\MedTech\Prosthesis Sizing App\config
+2. Place `serviceAccountKey.json` in that folder
+3. Launch the app
+4. Log in with your email and password
+
+NOTES
+- Do not share `serviceAccountKey.json` with unauthorized users
+- Offline records are stored locally and will sync when online login succeeds
