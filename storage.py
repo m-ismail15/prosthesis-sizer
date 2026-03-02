@@ -6,6 +6,8 @@ from datetime import datetime, timezone
 
 from app_paths import user_queue_dir
 
+FIRESTORE_TIMEOUT_SECONDS = 10
+
 
 # ---------------- STORAGE PRIMITIVES ---------------- #
 class StorageError(Exception):
@@ -29,17 +31,20 @@ class FirebaseStore:
     mode_name = "online"
 
     def __init__(self):
+        pass
+
+    def _db(self):
         from firebase_config import get_firestore_client
 
-        self.db = get_firestore_client()
+        return get_firestore_client()
 
     def authenticate(self, email: str, password: str):
-        users_ref = self.db.collection("Users")
+        users_ref = self._db().collection("Users")
         query = (
             users_ref.where("email", "==", email)
             .where("password", "==", password)
             .limit(1)
-            .stream()
+            .stream(timeout=FIRESTORE_TIMEOUT_SECONDS)
         )
 
         user_doc = next(query, None)
@@ -54,11 +59,18 @@ class FirebaseStore:
         record = dict(payload)
         record["created_at"] = fb_firestore.SERVER_TIMESTAMP
         record["updated_at"] = fb_firestore.SERVER_TIMESTAMP
-        _, doc_ref = self.db.collection("prosthesis_records").add(record)
+        _, doc_ref = self._db().collection("prosthesis_records").add(
+            record,
+            timeout=FIRESTORE_TIMEOUT_SECONDS,
+        )
         return doc_ref.id
 
     def list_records(self):
-        return list(self.db.collection("prosthesis_records").stream())
+        return list(
+            self._db().collection("prosthesis_records").stream(
+                timeout=FIRESTORE_TIMEOUT_SECONDS
+            )
+        )
 
     def search_records(self, text: str):
         text = text.strip().lower()

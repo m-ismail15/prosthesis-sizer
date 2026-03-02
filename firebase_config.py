@@ -61,3 +61,11 @@ def initialize_firebase() -> None:
 def get_firestore_client():
     initialize_firebase()
     return firestore.client()
+
+
+def is_firebase_configured() -> bool:
+    try:
+        find_service_account_key()
+        return True
+    except FileNotFoundError:
+        return False

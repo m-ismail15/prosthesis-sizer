@@ -2,7 +2,7 @@
 import os
 import sys
 
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import QObject, QThread, Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QColor, QDoubleValidator, QFont, QLinearGradient, QPainter, QPen, QPixmap
 from PyQt6.QtWidgets import (QAbstractItemView, QApplication, QHBoxLayout, QHeaderView, QLabel, QLineEdit, QMainWindow, QMessageBox,
     QPushButton, QScrollArea, QSplashScreen, QStackedWidget, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
@@ -10,6 +10,7 @@ from PyQt6.QtWidgets import (QAbstractItemView, QApplication, QHBoxLayout, QHead
 
 from app_paths import install_base_dir, user_config_dir
 from app_version import APP_VERSION
+from firebase_config import is_firebase_configured
 from sizing import compute_prosthesis_size
 from storage import FirebaseStore, LocalJsonStore, StorageError, default_local_store_path
 
@@ -72,6 +73,50 @@ def create_splash_pixmap() -> QPixmap:
     return pixmap
 
 
+class OnlineLoginWorker(QObject):
+    finished = pyqtSignal(str)
+    invalid_credentials = pyqtSignal()
+    error = pyqtSignal(str)
+    progress = pyqtSignal(str)
+
+    def __init__(self, email: str, password: str):
+        super().__init__()
+        self.email = email
+        self.password = password
+
+    def run(self):
+        try:
+            self.progress.emit("Signing in...")
+            # Create the Firebase client inside the worker thread to avoid
+            # cross-thread use of network-bound client objects.
+            online_store = FirebaseStore()
+            role = online_store.authenticate(self.email, self.password)
+            if not role:
+                self.invalid_credentials.emit()
+                return
+
+            self.finished.emit(role)
+        except Exception as exc:
+            self.error.emit(str(exc))
+
+
+class OfflineSyncWorker(QObject):
+    finished = pyqtSignal(object)
+    error = pyqtSignal(str)
+
+    def __init__(self, offline_store):
+        super().__init__()
+        self.offline_store = offline_store
+
+    def run(self):
+        try:
+            online_store = FirebaseStore()
+            sync_result = self.offline_store.sync_pending_records(online_store)
+            self.finished.emit(sync_result)
+        except Exception as exc:
+            self.error.emit(str(exc))
+
+
 # ---------------- LOGIN WINDOW ---------------- #
 class LoginWindow(QWidget):
     def __init__(self):
@@ -82,6 +127,8 @@ class LoginWindow(QWidget):
         self.online_store = None
         self.online_error = ""
         self.offline_store = LocalJsonStore(default_local_store_path())
+        self.login_thread = None
+        self.login_worker = None
 
         self._try_enable_online_mode()
         self._build_ui()
@@ -92,11 +139,11 @@ class LoginWindow(QWidget):
             self.online_error = "Offline mode forced by PROSTHESIS_APP_MODE=offline."
             return
 
-        try:
-            # Firebase is optional at startup; failures should fall back to offline mode.
+        if is_firebase_configured():
+            # Delay Firestore client creation until the user actually signs in.
             self.online_store = FirebaseStore()
-        except Exception as exc:
-            self.online_error = str(exc)
+        else:
+            self.online_error = "Firebase key not found."
 
     def _build_ui(self):
         layout = QVBoxLayout()
@@ -114,13 +161,13 @@ class LoginWindow(QWidget):
         self.status_label.setWordWrap(True)
         layout.addWidget(self.status_label)
 
-        login_btn = QPushButton("Login Online")
-        login_btn.clicked.connect(self.login_online)
-        layout.addWidget(login_btn)
+        self.login_btn = QPushButton("Login Online")
+        self.login_btn.clicked.connect(self.login_online)
+        layout.addWidget(self.login_btn)
 
-        offline_btn = QPushButton("Continue Offline")
-        offline_btn.clicked.connect(self.open_offline_mode)
-        layout.addWidget(offline_btn)
+        self.offline_btn = QPushButton("Continue Offline")
+        self.offline_btn.clicked.connect(self.open_offline_mode)
+        layout.addWidget(self.offline_btn)
 
         if self.online_store is not None:
             self.status_label.setText(
@@ -149,19 +196,27 @@ class LoginWindow(QWidget):
             self.status_label.setText("Please enter email and password.")
             return
 
-        try:
-            role = self.online_store.authenticate(email, password)
-            if role:
-                sync_result = self.sync_offline_records()
-                self.open_main_app(self.online_store, role)
-                self.show_sync_result(sync_result)
-            else:
-                self.status_label.setText("Invalid credentials.")
-        except Exception as exc:
-            self.status_label.setText(
-                "Could not log in online. Use Continue Offline to queue records locally.\n\n"
-                f"Reason: {exc}"
-            )
+        if self.login_thread is not None:
+            return
+
+        self._set_busy_state(True, "Signing in...")
+        self.login_thread = QThread(self)
+        self.login_worker = OnlineLoginWorker(email, password)
+        self.login_worker.moveToThread(self.login_thread)
+
+        self.login_thread.started.connect(self.login_worker.run)
+        self.login_worker.progress.connect(self.status_label.setText)
+        self.login_worker.invalid_credentials.connect(
+            lambda: self._handle_login_invalid()
+        )
+        self.login_worker.error.connect(self._handle_login_error)
+        self.login_worker.finished.connect(self._handle_login_success)
+        self.login_worker.finished.connect(self.login_thread.quit)
+        self.login_worker.invalid_credentials.connect(self.login_thread.quit)
+        self.login_worker.error.connect(self.login_thread.quit)
+        self.login_thread.finished.connect(self._cleanup_login_thread)
+
+        self.login_thread.start()
 
     def open_offline_mode(self):
         try:
@@ -206,6 +261,37 @@ class LoginWindow(QWidget):
             f"offline record(s). Unsynced records remain in the local queue.\n\n{error_text}",
         )
 
+    def _set_busy_state(self, busy: bool, message: str = ""):
+        self.login_btn.setEnabled(not busy)
+        self.offline_btn.setEnabled(not busy)
+        self.email_input.setEnabled(not busy)
+        self.password_input.setEnabled(not busy)
+        if message:
+            self.status_label.setText(message)
+
+    def _handle_login_invalid(self):
+        self._set_busy_state(False, "Invalid credentials.")
+
+    def _handle_login_error(self, error_message: str):
+        self._set_busy_state(
+            False,
+            "Could not log in online. Use Continue Offline to queue records locally.\n\n"
+            f"Reason: {error_message}",
+        )
+
+    def _handle_login_success(self, role: str):
+        self._set_busy_state(False)
+        self.open_main_app(self.online_store, role)
+        QTimer.singleShot(0, self.main_app.start_offline_sync)
+
+    def _cleanup_login_thread(self):
+        if self.login_worker is not None:
+            self.login_worker.deleteLater()
+        if self.login_thread is not None:
+            self.login_thread.deleteLater()
+        self.login_worker = None
+        self.login_thread = None
+
     def open_main_app(self, store, role: str):
         self.hide()
         self.main_app = ProsthesisApp(store=store, role=role)
@@ -218,6 +304,8 @@ class ProsthesisApp(QMainWindow):
         super().__init__()
         self.store = store
         self.role = role
+        self.sync_thread = None
+        self.sync_worker = None
         self.setWindowTitle(
             f"Prosthesis Sizing App v{APP_VERSION} - {self.store.mode_name.title()} Mode - Role: {self.role}"
         )
@@ -265,6 +353,50 @@ class ProsthesisApp(QMainWindow):
         else:
             mode_message += f" Firebase key search includes: {user_config_dir()}"
         self.statusBar().showMessage(mode_message)
+
+    def start_offline_sync(self):
+        if self.store.mode_name != "online" or self.sync_thread is not None:
+            return
+
+        self.statusBar().showMessage("Checking for queued offline records to sync...")
+        self.sync_thread = QThread(self)
+        self.sync_worker = OfflineSyncWorker(LocalJsonStore(default_local_store_path()))
+        self.sync_worker.moveToThread(self.sync_thread)
+
+        self.sync_thread.started.connect(self.sync_worker.run)
+        self.sync_worker.finished.connect(self._handle_sync_finished)
+        self.sync_worker.error.connect(self._handle_sync_error)
+        self.sync_worker.finished.connect(self.sync_thread.quit)
+        self.sync_worker.error.connect(self.sync_thread.quit)
+        self.sync_thread.finished.connect(self._cleanup_sync_thread)
+
+        self.sync_thread.start()
+
+    def _handle_sync_finished(self, sync_result: dict | None):
+        if not sync_result or sync_result["pending_count"] == 0:
+            self.statusBar().showMessage("Online mode ready.")
+            return
+
+        if sync_result["failed_count"] == 0:
+            self.statusBar().showMessage(
+                f"Synced {sync_result['synced_count']} offline record(s)."
+            )
+            return
+
+        self.statusBar().showMessage(
+            f"Synced {sync_result['synced_count']} of {sync_result['pending_count']} offline record(s)."
+        )
+
+    def _handle_sync_error(self, error_message: str):
+        self.statusBar().showMessage(f"Offline sync failed: {error_message}")
+
+    def _cleanup_sync_thread(self):
+        if self.sync_worker is not None:
+            self.sync_worker.deleteLater()
+        if self.sync_thread is not None:
+            self.sync_thread.deleteLater()
+        self.sync_worker = None
+        self.sync_thread = None
 
     # ---------------- HOME PAGE ---------------- #
     def build_home(self):
