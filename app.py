@@ -75,11 +75,11 @@ class LoginWindow(QWidget):
 
         if self.online_store is not None:
             self.status_label.setText(
-                "Online mode is available. Continue Offline stores records on this device only."
+                "Online mode is available. Continue Offline keeps records in a temporary local queue until they are synced online."
             )
         else:
             self.status_label.setText(
-                "Online mode is unavailable. Continue Offline will use local storage.\n\n"
+                "Online mode is unavailable. Continue Offline will store records in a temporary local queue until online sync is available.\n\n"
                 f"Reason: {self.online_error}"
             )
 
@@ -88,7 +88,7 @@ class LoginWindow(QWidget):
     def login_online(self):
         if self.online_store is None:
             self.status_label.setText(
-                "Online mode is unavailable. Use Continue Offline to work locally."
+                "Online mode is unavailable. Use Continue Offline to queue records locally."
             )
             return
 
@@ -109,7 +109,7 @@ class LoginWindow(QWidget):
                 self.status_label.setText("Invalid credentials.")
         except Exception as exc:
             self.status_label.setText(
-                "Could not log in online. Use Continue Offline to work locally.\n\n"
+                "Could not log in online. Use Continue Offline to queue records locally.\n\n"
                 f"Reason: {exc}"
             )
 
@@ -141,7 +141,7 @@ class LoginWindow(QWidget):
             QMessageBox.information(
                 self.main_app,
                 "Offline Sync Complete",
-                f"Synced {sync_result['synced_count']} offline record(s) to online storage.",
+                f"Synced {sync_result['synced_count']} offline record(s) to online storage and cleared them from the local queue.",
             )
             return
 
@@ -153,7 +153,7 @@ class LoginWindow(QWidget):
             self.main_app,
             "Offline Sync Incomplete",
             f"Synced {sync_result['synced_count']} of {sync_result['pending_count']} "
-            f"offline record(s).\n\n{error_text}",
+            f"offline record(s). Unsynced records remain in the local queue.\n\n{error_text}",
         )
 
     def open_main_app(self, store, role: str):
@@ -208,7 +208,10 @@ class ProsthesisApp(QMainWindow):
 
         mode_message = f"Running in {self.store.mode_name} mode."
         if self.store.mode_name == "offline":
-            mode_message += f" Local data file: {default_local_store_path()}"
+            mode_message += (
+                " Pending records stay in a temporary local queue until they are synced online."
+                f" Queue file: {default_local_store_path()}"
+            )
         self.statusBar().showMessage(mode_message)
 
     # ---------------- HOME PAGE ---------------- #

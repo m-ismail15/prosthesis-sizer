@@ -92,13 +92,11 @@ class LocalJsonStore:
 
         record = dict(payload)
         # Keep the saved structure close to Firestore records so the UI stays simple.
+        # This file acts as a pending-sync queue, not a permanent local archive.
         record_id = uuid.uuid4().hex
         record["id"] = record_id
         record["created_at"] = timestamp
         record["updated_at"] = timestamp
-        record["synced_to_online"] = False
-        record["synced_at"] = None
-        record["online_record_id"] = None
 
         data["prosthesis_records"].append(record)
         self._write_data(data)
@@ -126,10 +124,9 @@ class LocalJsonStore:
 
     def sync_pending_records(self, online_store: FirebaseStore) -> dict:
         data = self._read_data()
+        all_records = data["prosthesis_records"]
         pending_records = [
-            record
-            for record in data["prosthesis_records"]
-            if not record.get("synced_to_online", False)
+            record for record in all_records if not record.get("synced_to_online", False)
         ]
 
         result = {
@@ -140,25 +137,30 @@ class LocalJsonStore:
         }
 
         if not pending_records:
+            if len(pending_records) != len(all_records):
+                data["prosthesis_records"] = pending_records
+                self._write_data(data)
             return result
 
-        sync_timestamp = datetime.now(timezone.utc).isoformat()
+        remaining_records = []
 
-        for record in pending_records:
+        for record in all_records:
+            if record.get("synced_to_online", False):
+                # Clean up legacy entries created by the previous "mark as synced" approach.
+                continue
+
             try:
-                online_record_id = online_store.save_record(
-                    self._build_online_payload(record)
-                )
+                online_store.save_record(self._build_online_payload(record))
             except Exception as exc:
                 result["failed_count"] += 1
                 result["errors"].append(f"{record.get('name', 'Unknown')}: {exc}")
+                remaining_records.append(record)
                 continue
 
-            record["synced_to_online"] = True
-            record["synced_at"] = sync_timestamp
-            record["online_record_id"] = online_record_id
+            # Successfully synced records are removed from the local queue.
             result["synced_count"] += 1
 
+        data["prosthesis_records"] = remaining_records
         self._write_data(data)
         return result
 
