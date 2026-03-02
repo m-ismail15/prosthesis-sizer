@@ -2,16 +2,16 @@
 
 BC_BINS = {
     "XS": (266.529, 315.221),
-    "S":  (299.743, 349.507),
-    "M":  (332.936, 383.814),
-    "L":  (366.114, 418.136),
+    "S": (299.743, 349.507),
+    "M": (332.936, 383.814),
+    "L": (366.114, 418.136),
 }
 
 FC_BINS = {
     "XS": (208.958, 255.442),
-    "S":  (229.545, 278.055),
-    "M":  (250.122, 300.678),
-    "L":  (270.691, 323.309),
+    "S": (229.545, 278.055),
+    "M": (250.122, 300.678),
+    "L": (270.691, 323.309),
 }
 
 AR_BINS = {
@@ -36,7 +36,7 @@ WIDTH_ORDER = ["XS", "S", "M", "L"]
 # ---------------- HELPER FUNCTIONS ---------------- #
 
 def find_bins(value, bins):
-    """Return all bins that the value falls into (handles overlaps)."""
+    """Return all bins that the value falls into, including overlaps."""
     matches = []
     for label, (low, high) in bins.items():
         if low <= value <= high:
@@ -45,7 +45,7 @@ def find_bins(value, bins):
 
 
 def choose_larger_bin(bin_list):
-    """Return the largest bin from a list."""
+    """Return the largest width bin from a list of candidates."""
     return max(bin_list, key=lambda b: WIDTH_ORDER.index(b))
 
 
@@ -57,29 +57,29 @@ def determine_width_size(bc, fc):
 
     warning = ""
 
-    # Case 1: both single bins
+    # Case 1: both measurements land in a single bin.
     if len(bc_bins) == 1 and len(fc_bins) == 1:
         bc_bin = bc_bins[0]
         fc_bin = fc_bins[0]
 
         if bc_bin == fc_bin:
             return bc_bin, warning
-        else:
-            larger = choose_larger_bin([bc_bin, fc_bin])
-            warning = (
-                f"BC suggests {bc_bin}, FC suggests {fc_bin}. "
-                f"Selected larger size {larger} to ensure component compatibility."
-            )
-            return larger, warning
 
-    # Case 2: one single, one overlap
+        larger = choose_larger_bin([bc_bin, fc_bin])
+        warning = (
+            f"BC suggests {bc_bin}, FC suggests {fc_bin}. "
+            f"Selected larger size {larger} to ensure component compatibility."
+        )
+        return larger, warning
+
+    # Case 2: prefer the single-bin measurement when the other overlaps.
     if len(bc_bins) == 1 and len(fc_bins) > 1:
         return bc_bins[0], "FC overlaps bins; matched to BC size."
 
     if len(fc_bins) == 1 and len(bc_bins) > 1:
         return fc_bins[0], "BC overlaps bins; matched to FC size."
 
-    # Case 3: both overlap
+    # Case 3: both overlap, so choose the larger compatible size.
     if len(bc_bins) > 1 and len(fc_bins) > 1:
         combined = list(set(bc_bins + fc_bins))
         larger = choose_larger_bin(combined)
@@ -100,7 +100,8 @@ def determine_length(value, bins):
         return None
     if len(matches) == 1:
         return matches[0]
-    # Overlap → choose larger length
+
+    # Overlaps resolve upward to avoid undersizing.
     return max(matches)
 
 
@@ -111,11 +112,9 @@ def compute_prosthesis_size(bc, fc, ar, rs):
     ar_length = determine_length(ar, AR_BINS)
     rs_length = determine_length(rs, RS_BINS)
 
-    message = width_warning
-
     return {
         "width": width_size,
         "humeral_length": ar_length,
         "radial_length": rs_length,
-        "message": message
+        "message": width_warning,
     }
