@@ -2,9 +2,10 @@
 import os
 import sys
 
-from PyQt6.QtGui import QDoubleValidator, QPixmap
+from PyQt6.QtCore import Qt
+from PyQt6.QtGui import QColor, QDoubleValidator, QFont, QLinearGradient, QPainter, QPen, QPixmap
 from PyQt6.QtWidgets import (QAbstractItemView, QApplication, QHBoxLayout, QHeaderView, QLabel, QLineEdit, QMainWindow, QMessageBox,
-    QPushButton, QScrollArea, QStackedWidget, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
+    QPushButton, QScrollArea, QSplashScreen, QStackedWidget, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
 )
 
 from app_paths import install_base_dir, user_config_dir
@@ -21,6 +22,54 @@ def resource_base_dir() -> str:
 
 def resource_path(relative_path: str) -> str:
     return os.path.join(resource_base_dir(), relative_path)
+
+
+def create_splash_pixmap() -> QPixmap:
+    """Create a branded splash image without introducing another required asset."""
+    width = 720
+    height = 420
+    pixmap = QPixmap(width, height)
+
+    painter = QPainter(pixmap)
+    gradient = QLinearGradient(0, 0, width, height)
+    gradient.setColorAt(0.0, QColor("#eef4ef"))
+    gradient.setColorAt(0.55, QColor("#d9e7d8"))
+    gradient.setColorAt(1.0, QColor("#b7ceb3"))
+    painter.fillRect(pixmap.rect(), gradient)
+
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+
+    panel_color = QColor(255, 255, 255, 228)
+    painter.setPen(Qt.PenStyle.NoPen)
+    painter.setBrush(panel_color)
+    painter.drawRoundedRect(46, 42, width - 92, height - 84, 24, 24)
+
+    logo_path = resource_path("MedTechLogo.ico")
+    logo = QPixmap(logo_path)
+    if not logo.isNull():
+        painter.drawPixmap(70, 78, 88, 88, logo)
+
+    title_font = QFont("Segoe UI", 24, QFont.Weight.Bold)
+    subtitle_font = QFont("Segoe UI", 11)
+    version_font = QFont("Segoe UI", 10, QFont.Weight.DemiBold)
+
+    painter.setPen(QColor("#193024"))
+    painter.setFont(title_font)
+    painter.drawText(185, 102, "Prosthesis Sizing App")
+
+    painter.setFont(subtitle_font)
+    painter.setPen(QColor("#496256"))
+    painter.drawText(185, 138, "Offline-ready prosthesis sizing and record management")
+
+    painter.setFont(version_font)
+    painter.setPen(QColor("#2f5645"))
+    painter.drawText(70, 188, f"Version {APP_VERSION}")
+
+    painter.setPen(QPen(QColor("#8ea88f"), 2))
+    painter.drawLine(70, 214, width - 70, 214)
+
+    painter.end()
+    return pixmap
 
 
 # ---------------- LOGIN WINDOW ---------------- #
@@ -431,6 +480,24 @@ class ProsthesisApp(QMainWindow):
 # ---------------- APPLICATION ENTRY POINT ---------------- #
 if __name__ == "__main__":
     app = QApplication(sys.argv)
+    splash = QSplashScreen(create_splash_pixmap())
+    splash.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, True)
+    splash.show()
+    splash.showMessage(
+        "Loading application...",
+        Qt.AlignmentFlag.AlignBottom | Qt.AlignmentFlag.AlignHCenter,
+        QColor("#1f3b2f"),
+    )
+    app.processEvents()
+
+    splash.showMessage(
+        "Checking local resources and online mode...",
+        Qt.AlignmentFlag.AlignBottom | Qt.AlignmentFlag.AlignHCenter,
+        QColor("#1f3b2f"),
+    )
+    app.processEvents()
+
     login = LoginWindow()
     login.show()
+    splash.finish(login)
     sys.exit(app.exec())
