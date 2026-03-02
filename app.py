@@ -11,6 +11,7 @@ from sizing import compute_prosthesis_size
 from storage import FirebaseStore, LocalJsonStore, StorageError, default_local_store_path
 
 
+# ---------------- RESOURCE HELPERS ---------------- #
 def resource_base_dir() -> str:
     """Base folder for resources in dev and in the packaged EXE."""
     if getattr(sys, "frozen", False):
@@ -22,6 +23,7 @@ def resource_path(relative_path: str) -> str:
     return os.path.join(resource_base_dir(), relative_path)
 
 
+# ---------------- LOGIN WINDOW ---------------- #
 class LoginWindow(QWidget):
     def __init__(self):
         super().__init__()
@@ -42,6 +44,7 @@ class LoginWindow(QWidget):
             return
 
         try:
+            # Firebase is optional at startup; failures should fall back to offline mode.
             self.online_store = FirebaseStore()
         except Exception as exc:
             self.online_error = str(exc)
@@ -120,6 +123,7 @@ class LoginWindow(QWidget):
         self.main_app.show()
 
 
+# ---------------- MAIN APPLICATION ---------------- #
 class ProsthesisApp(QMainWindow):
     def __init__(self, store, role: str = "prosthetist"):
         super().__init__()
@@ -168,6 +172,7 @@ class ProsthesisApp(QMainWindow):
             mode_message += f" Local data file: {default_local_store_path()}"
         self.statusBar().showMessage(mode_message)
 
+    # ---------------- HOME PAGE ---------------- #
     def build_home(self):
         page = QWidget()
         layout = QVBoxLayout()
@@ -256,6 +261,7 @@ class ProsthesisApp(QMainWindow):
             f"{result['message']}"
         )
 
+    # ---------------- RECORDS PAGE ---------------- #
     def build_records(self):
         page = QWidget()
         layout = QVBoxLayout()
@@ -326,6 +332,7 @@ class ProsthesisApp(QMainWindow):
                 row_index, 7, QTableWidgetItem(data.get("sizing_note", ""))
             )
 
+    # ---------------- GUIDE PAGE ---------------- #
     def build_measurement_guide(self):
         scroll = QScrollArea()
         layout = QVBoxLayout()
@@ -376,6 +383,7 @@ class ProsthesisApp(QMainWindow):
         return scroll
 
 
+# ---------------- APPLICATION ENTRY POINT ---------------- #
 if __name__ == "__main__":
     app = QApplication(sys.argv)
     login = LoginWindow()
