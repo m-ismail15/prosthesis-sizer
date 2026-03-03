@@ -2,7 +2,7 @@
 import os
 import sys
 
-from PyQt6.QtCore import QObject, QThread, Qt, QTimer, pyqtSignal
+from PyQt6.QtCore import QObject, QElapsedTimer, QThread, Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QColor, QDoubleValidator, QFont, QLinearGradient, QPainter, QPen, QPixmap
 from PyQt6.QtWidgets import (QAbstractItemView, QApplication, QHBoxLayout, QHeaderView, QLabel, QLineEdit, QMainWindow, QMessageBox,
     QPushButton, QScrollArea, QSplashScreen, QStackedWidget, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
@@ -25,49 +25,92 @@ def resource_path(relative_path: str) -> str:
     return os.path.join(resource_base_dir(), relative_path)
 
 
+# ---------------- SPLASH SCREEN ---------------- #
 def create_splash_pixmap() -> QPixmap:
-    """Create a branded splash image without introducing another required asset."""
+    """Create a branded splash image using the packaged background asset."""
     width = 720
     height = 420
     pixmap = QPixmap(width, height)
 
     painter = QPainter(pixmap)
-    gradient = QLinearGradient(0, 0, width, height)
-    gradient.setColorAt(0.0, QColor("#eef4ef"))
-    gradient.setColorAt(0.55, QColor("#d9e7d8"))
-    gradient.setColorAt(1.0, QColor("#b7ceb3"))
-    painter.fillRect(pixmap.rect(), gradient)
-
     painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+    painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
 
-    panel_color = QColor(255, 255, 255, 228)
+    splash_bg_color = QColor("#cce5ff")
+    painter.fillRect(pixmap.rect(), splash_bg_color)
+
+    bg_path = resource_path("MedTechBG.png")
+    bg_logo = QPixmap(bg_path)
+    if not bg_logo.isNull():
+        scaled_logo = bg_logo.scaled(
+            width - 56,
+            height - 56,
+            Qt.AspectRatioMode.KeepAspectRatio,
+            Qt.TransformationMode.SmoothTransformation,
+        )
+        bg_left = (width - scaled_logo.width()) // 2
+        bg_top = (height - scaled_logo.height()) // 2
+        painter.drawPixmap(bg_left, bg_top, scaled_logo)
+
+    overlay = QLinearGradient(0, 0, 0, height)
+    overlay.setColorAt(0.0, QColor(255, 255, 255, 55))
+    overlay.setColorAt(0.45, QColor(255, 255, 255, 85))
+    overlay.setColorAt(1.0, QColor(255, 255, 255, 125))
+    painter.fillRect(pixmap.rect(), overlay)
+
+    panel_left = 34
+    panel_top = 18
+    panel_width = width - 68
+    panel_height = height - 36
+
+    panel_color = QColor(248, 252, 255, 226)
     painter.setPen(Qt.PenStyle.NoPen)
     painter.setBrush(panel_color)
-    painter.drawRoundedRect(46, 42, width - 92, height - 84, 24, 24)
-
-    logo_path = resource_path("MedTechLogo.ico")
-    logo = QPixmap(logo_path)
-    if not logo.isNull():
-        painter.drawPixmap(70, 78, 88, 88, logo)
+    painter.drawRoundedRect(panel_left, panel_top, panel_width, panel_height, 28, 28)
 
     title_font = QFont("Segoe UI", 24, QFont.Weight.Bold)
-    subtitle_font = QFont("Segoe UI", 11)
+    subtitle_font = QFont("Segoe UI", 18, QFont.Weight.DemiBold)
     version_font = QFont("Segoe UI", 10, QFont.Weight.DemiBold)
 
-    painter.setPen(QColor("#193024"))
+    title_top = panel_top + 110
+    subtitle_top = title_top + 40
+    divider_y = subtitle_top + 50
+
+    painter.setPen(QColor("#1A1930"))
     painter.setFont(title_font)
-    painter.drawText(185, 102, "Prosthesis Sizing App")
+    painter.drawText(
+        panel_left,
+        title_top,
+        panel_width,
+        36,
+        int(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter),
+        "UCT MedTech",
+    )
 
     painter.setFont(subtitle_font)
-    painter.setPen(QColor("#496256"))
-    painter.drawText(185, 138, "Offline-ready prosthesis sizing and record management")
+    painter.setPen(QColor("#353C5C"))
+    painter.drawText(
+        panel_left,
+        subtitle_top,
+        panel_width,
+        32,
+        int(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter),
+        "Prosthesis Sizing Application",
+    )
+
+    painter.setPen(QPen(QColor("#8ea8a8"), 2))
+    painter.drawLine(panel_left + 42, divider_y, width - panel_left - 42, divider_y)
 
     painter.setFont(version_font)
-    painter.setPen(QColor("#2f5645"))
-    painter.drawText(70, 188, f"Version {APP_VERSION}")
-
-    painter.setPen(QPen(QColor("#8ea88f"), 2))
-    painter.drawLine(70, 214, width - 70, 214)
+    painter.setPen(QColor("#56412f"))
+    painter.drawText(
+        panel_left,
+        panel_top + panel_height - 74,
+        panel_width,
+        24,
+        int(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter),
+        f"Version {APP_VERSION}",
+    )
 
     painter.end()
     return pixmap
@@ -150,11 +193,13 @@ class LoginWindow(QWidget):
 
         layout.addWidget(QLabel("Email:"))
         self.email_input = QLineEdit()
+        self.email_input.returnPressed.connect(self.login_online)
         layout.addWidget(self.email_input)
 
         layout.addWidget(QLabel("Password:"))
         self.password_input = QLineEdit()
         self.password_input.setEchoMode(QLineEdit.EchoMode.Password)
+        self.password_input.returnPressed.connect(self.login_online)
         layout.addWidget(self.password_input)
 
         self.status_label = QLabel("")
@@ -612,6 +657,9 @@ class ProsthesisApp(QMainWindow):
 # ---------------- APPLICATION ENTRY POINT ---------------- #
 if __name__ == "__main__":
     app = QApplication(sys.argv)
+    splash_timer = QElapsedTimer()
+    splash_timer.start()
+
     splash = QSplashScreen(create_splash_pixmap())
     splash.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, True)
     splash.show()
@@ -630,6 +678,11 @@ if __name__ == "__main__":
     app.processEvents()
 
     login = LoginWindow()
-    login.show()
-    splash.finish(login)
+
+    def show_login():
+        login.show()
+        splash.finish(login)
+
+    remaining_ms = max(0, 4000 - splash_timer.elapsed())
+    QTimer.singleShot(remaining_ms, show_login)
     sys.exit(app.exec())

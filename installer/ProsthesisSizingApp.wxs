@@ -50,6 +50,10 @@
         <File Id="FilIcon" Source="$(var.StagingDir)\MedTechLogo.ico" KeyPath="yes" />
       </Component>
 
+      <Component Id="CmpSplashBackground" Guid="7C3D1EE9-FD19-4E52-8458-47CFB938E81C" Win64="yes">
+        <File Id="FilSplashBackground" Source="$(var.StagingDir)\MedTechBG.png" KeyPath="yes" />
+      </Component>
+
       <Directory Id="ImagesFolder" Name="images">
         <Component Id="CmpImageAR" Guid="212D5A4A-07B2-4C76-B1B7-4EC4E0A40B6C" Win64="yes">
           <File Id="FilImageAR" Source="$(var.StagingDir)\images\ARLength.png" KeyPath="yes" />
@@ -90,6 +94,7 @@
       <ComponentRef Id="CmpReadme" />
       <ComponentRef Id="CmpInstallGuide" />
       <ComponentRef Id="CmpIcon" />
+      <ComponentRef Id="CmpSplashBackground" />
       <ComponentRef Id="CmpImageAR" />
       <ComponentRef Id="CmpImageBC" />
       <ComponentRef Id="CmpImageFC" />
