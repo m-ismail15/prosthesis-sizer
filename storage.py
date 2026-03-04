@@ -5,6 +5,7 @@ from copy import deepcopy
 from datetime import datetime, timezone
 
 from app_paths import user_queue_dir
+from auth_client import AuthClientError, sign_in_email_password
 
 FIRESTORE_TIMEOUT_SECONDS = 10
 
@@ -22,6 +23,7 @@ class RecordSnapshot:
     def to_dict(self) -> dict:
         return deepcopy(self._data)
 
+
 def default_local_store_path() -> str:
     return os.path.join(user_queue_dir(), "offline_records.json")
 
@@ -31,27 +33,77 @@ class FirebaseStore:
     mode_name = "online"
 
     def __init__(self):
-        pass
+        self.current_uid = None
+        self.current_email = None
+        self.current_role = None
+        self.current_id_token = None
+        self.last_auth_warning = None
 
     def _db(self):
         from firebase_config import get_firestore_client
 
         return get_firestore_client()
 
-    def authenticate(self, email: str, password: str):
-        users_ref = self._db().collection("Users")
-        query = (
-            users_ref.where("email", "==", email)
-            .where("password", "==", password)
-            .limit(1)
-            .stream(timeout=FIRESTORE_TIMEOUT_SECONDS)
-        )
-
-        user_doc = next(query, None)
-        if not user_doc:
+    def _current_actor(self) -> dict | None:
+        if not self.current_uid and not self.current_email:
             return None
 
-        return user_doc.to_dict().get("role", "prosthetist")
+        return {
+            "uid": self.current_uid,
+            "email": self.current_email,
+        }
+
+    def get_authenticated_context(self) -> dict:
+        return {
+            "uid": self.current_uid,
+            "email": self.current_email,
+            "role": self.current_role,
+            "id_token": self.current_id_token,
+            "warning": self.last_auth_warning,
+        }
+
+    def apply_authenticated_context(self, context: dict | None) -> None:
+        context = context or {}
+        self.current_uid = context.get("uid")
+        self.current_email = context.get("email")
+        self.current_role = context.get("role")
+        self.current_id_token = context.get("id_token")
+        self.last_auth_warning = context.get("warning")
+
+    def authenticate(self, email: str, password: str):
+        try:
+            auth_result = sign_in_email_password(email, password)
+        except AuthClientError as exc:
+            raise StorageError(str(exc)) from exc
+
+        self.current_uid = auth_result["uid"]
+        self.current_email = auth_result["email"]
+        self.current_id_token = auth_result["id_token"]
+        self.last_auth_warning = None
+
+        user_doc = (
+            self._db()
+            .collection("users")
+            .document(self.current_uid)
+            .get(timeout=FIRESTORE_TIMEOUT_SECONDS)
+        )
+
+        role = "prosthetist"
+        if user_doc.exists:
+            profile = user_doc.to_dict() or {}
+            role = profile.get("role", "prosthetist") or "prosthetist"
+            if profile.get("active", True) is False:
+                raise StorageError(
+                    "This user account has been deactivated. Contact an administrator."
+                )
+        else:
+            self.last_auth_warning = (
+                "No Firestore user profile was found. Access was granted as prosthetist. "
+                "An administrator should provision this user in the Admin Panel."
+            )
+
+        self.current_role = role
+        return role
 
     def save_record(self, payload: dict) -> str:
         from firebase_admin import firestore as fb_firestore
@@ -59,11 +111,34 @@ class FirebaseStore:
         record = dict(payload)
         record["created_at"] = fb_firestore.SERVER_TIMESTAMP
         record["updated_at"] = fb_firestore.SERVER_TIMESTAMP
+        actor = self._current_actor()
+        if actor:
+            record["created_by"] = actor
+            record["updated_by"] = actor
         _, doc_ref = self._db().collection("prosthesis_records").add(
             record,
             timeout=FIRESTORE_TIMEOUT_SECONDS,
         )
         return doc_ref.id
+
+    def update_record(self, record_id: str, payload: dict) -> None:
+        from firebase_admin import firestore as fb_firestore
+
+        record = dict(payload)
+        record["updated_at"] = fb_firestore.SERVER_TIMESTAMP
+        actor = self._current_actor()
+        if actor:
+            record["updated_by"] = actor
+
+        self._db().collection("prosthesis_records").document(record_id).update(
+            record,
+            timeout=FIRESTORE_TIMEOUT_SECONDS,
+        )
+
+    def delete_record(self, record_id: str) -> None:
+        self._db().collection("prosthesis_records").document(record_id).delete(
+            timeout=FIRESTORE_TIMEOUT_SECONDS
+        )
 
     def list_records(self):
         return list(
@@ -78,7 +153,90 @@ class FirebaseStore:
             return self.list_records()
 
         records = self.list_records()
-        return [record for record in records if text in record.to_dict().get("name_lower", "")]
+        return [
+            record
+            for record in records
+            if text in record.to_dict().get("name_lower", "")
+        ]
+
+    def create_user_account(
+        self, email: str, password: str, role: str, active: bool = True
+    ) -> str:
+        from firebase_admin import auth as firebase_auth
+        from firebase_admin import firestore as fb_firestore
+
+        try:
+            user_record = firebase_auth.create_user(email=email, password=password)
+        except Exception as exc:
+            if type(exc).__name__ == "EmailAlreadyExistsError":
+                raise StorageError(
+                    "A Firebase Auth user with this email already exists."
+                ) from exc
+            raise StorageError(f"Could not create Firebase Auth user: {exc}") from exc
+
+        profile = {
+            "email": email,
+            "email_lower": email.lower(),
+            "role": role,
+            "active": active,
+            "created_at": fb_firestore.SERVER_TIMESTAMP,
+        }
+        actor = self._current_actor()
+        if actor:
+            profile["created_by"] = actor
+
+        self._db().collection("users").document(user_record.uid).set(
+            profile,
+            timeout=FIRESTORE_TIMEOUT_SECONDS,
+        )
+        return user_record.uid
+
+    def list_user_profiles(self) -> list[dict]:
+        docs = self._db().collection("users").stream(timeout=FIRESTORE_TIMEOUT_SECONDS)
+        profiles = []
+        for doc in docs:
+            data = doc.to_dict() or {}
+            stored_role = data.get("role", "user") or "user"
+            profiles.append(
+                {
+                    "uid": doc.id,
+                    "email": data.get("email", ""),
+                    "role": "admin" if stored_role == "admin" else "user",
+                    "active": bool(data.get("active", True)),
+                }
+            )
+
+        profiles.sort(key=lambda item: item["email"].lower())
+        return profiles
+
+    def update_user_profile(self, uid: str, role: str, active: bool) -> None:
+        from firebase_admin import firestore as fb_firestore
+
+        updates = {
+            "role": role,
+            "active": active,
+            "updated_at": fb_firestore.SERVER_TIMESTAMP,
+        }
+        actor = self._current_actor()
+        if actor:
+            updates["updated_by"] = actor
+
+        self._db().collection("users").document(uid).set(
+            updates,
+            merge=True,
+            timeout=FIRESTORE_TIMEOUT_SECONDS,
+        )
+
+    def change_current_user_password(self, new_password: str) -> None:
+        from firebase_admin import auth as firebase_auth
+
+        if not self.current_uid:
+            raise StorageError("No authenticated Firebase user is available.")
+
+        try:
+            firebase_auth.update_user(self.current_uid, password=new_password)
+        except Exception as exc:
+            raise StorageError(f"Could not update password: {exc}") from exc
 
 
 # ---------------- LOCAL OFFLINE STORE ---------------- #
@@ -91,6 +249,9 @@ class LocalJsonStore:
     def authenticate(self, email: str, password: str):
         # Offline mode is intentionally credential-free.
         return "prosthetist"
+
+    def change_current_user_password(self, new_password: str) -> None:
+        raise StorageError("Password changes are only available in online mode.")
 
     def save_record(self, payload: dict) -> str:
         data = self._read_data()
@@ -127,6 +288,36 @@ class LocalJsonStore:
             for record in self.list_records()
             if text in record.to_dict().get("name_lower", "")
         ]
+
+    def update_record(self, record_id: str, payload: dict) -> None:
+        data = self._read_data()
+        timestamp = datetime.now(timezone.utc).isoformat()
+
+        for index, record in enumerate(data["prosthesis_records"]):
+            if record.get("id") != record_id:
+                continue
+
+            updated_record = dict(payload)
+            updated_record["id"] = record_id
+            updated_record["created_at"] = record.get("created_at", timestamp)
+            updated_record["updated_at"] = timestamp
+            data["prosthesis_records"][index] = updated_record
+            self._write_data(data)
+            return
+
+        raise StorageError(f"Record not found: {record_id}")
+
+    def delete_record(self, record_id: str) -> None:
+        data = self._read_data()
+        original_count = len(data["prosthesis_records"])
+        data["prosthesis_records"] = [
+            record
+            for record in data["prosthesis_records"]
+            if record.get("id") != record_id
+        ]
+        if len(data["prosthesis_records"]) == original_count:
+            raise StorageError(f"Record not found: {record_id}")
+        self._write_data(data)
 
     def sync_pending_records(self, online_store: FirebaseStore) -> dict:
         data = self._read_data()

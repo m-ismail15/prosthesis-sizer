@@ -2,10 +2,12 @@
 import os
 import sys
 
+from auth_client import is_firebase_auth_configured
 from PyQt6.QtCore import QObject, QElapsedTimer, QThread, Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QColor, QDoubleValidator, QFont, QLinearGradient, QPainter, QPen, QPixmap
-from PyQt6.QtWidgets import (QAbstractItemView, QApplication, QHBoxLayout, QHeaderView, QLabel, QLineEdit, QMainWindow, QMessageBox,
-    QPushButton, QScrollArea, QSplashScreen, QStackedWidget, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
+from PyQt6.QtWidgets import (QAbstractItemView, QApplication, QCheckBox, QComboBox, QHBoxLayout, QHeaderView, QLabel, QLineEdit,
+    QMainWindow, QMessageBox, QPushButton, QScrollArea, QSizePolicy, QSplashScreen, QStackedWidget, QTableWidget,
+    QTableWidgetItem, QVBoxLayout, QWidget,
 )
 
 from app_paths import install_base_dir, user_config_dir
@@ -118,7 +120,7 @@ def create_splash_pixmap() -> QPixmap:
 
 class OnlineLoginWorker(QObject):
     finished = pyqtSignal(str)
-    invalid_credentials = pyqtSignal()
+    invalid_credentials = pyqtSignal(str)
     error = pyqtSignal(str)
     progress = pyqtSignal(str)
 
@@ -126,6 +128,7 @@ class OnlineLoginWorker(QObject):
         super().__init__()
         self.email = email
         self.password = password
+        self.auth_context = {}
 
     def run(self):
         try:
@@ -134,11 +137,13 @@ class OnlineLoginWorker(QObject):
             # cross-thread use of network-bound client objects.
             online_store = FirebaseStore()
             role = online_store.authenticate(self.email, self.password)
-            if not role:
-                self.invalid_credentials.emit()
-                return
-
+            self.auth_context = online_store.get_authenticated_context()
             self.finished.emit(role)
+        except StorageError as exc:
+            if str(exc) == "Invalid email or password.":
+                self.invalid_credentials.emit(str(exc))
+                return
+            self.error.emit(str(exc))
         except Exception as exc:
             self.error.emit(str(exc))
 
@@ -182,11 +187,17 @@ class LoginWindow(QWidget):
             self.online_error = "Offline mode forced by PROSTHESIS_APP_MODE=offline."
             return
 
-        if is_firebase_configured():
+        if not is_firebase_configured():
+            self.online_error = "Firebase service account key not found."
+            return
+
+        if is_firebase_auth_configured():
             # Delay Firestore client creation until the user actually signs in.
             self.online_store = FirebaseStore()
         else:
-            self.online_error = "Firebase key not found."
+            self.online_error = (
+                "FIREBASE_WEB_API_KEY is not set for Firebase Authentication."
+            )
 
     def _build_ui(self):
         layout = QVBoxLayout()
@@ -197,10 +208,21 @@ class LoginWindow(QWidget):
         layout.addWidget(self.email_input)
 
         layout.addWidget(QLabel("Password:"))
+        password_row = QHBoxLayout()
         self.password_input = QLineEdit()
         self.password_input.setEchoMode(QLineEdit.EchoMode.Password)
         self.password_input.returnPressed.connect(self.login_online)
-        layout.addWidget(self.password_input)
+        password_row.addWidget(self.password_input)
+
+        self.password_visibility_btn = QPushButton("Show")
+        self.password_visibility_btn.pressed.connect(
+            self.show_login_password
+        )
+        self.password_visibility_btn.released.connect(
+            self.hide_login_password
+        )
+        password_row.addWidget(self.password_visibility_btn)
+        layout.addLayout(password_row)
 
         self.status_label = QLabel("")
         self.status_label.setWordWrap(True)
@@ -251,9 +273,7 @@ class LoginWindow(QWidget):
 
         self.login_thread.started.connect(self.login_worker.run)
         self.login_worker.progress.connect(self.status_label.setText)
-        self.login_worker.invalid_credentials.connect(
-            lambda: self._handle_login_invalid()
-        )
+        self.login_worker.invalid_credentials.connect(self._handle_login_invalid)
         self.login_worker.error.connect(self._handle_login_error)
         self.login_worker.finished.connect(self._handle_login_success)
         self.login_worker.finished.connect(self.login_thread.quit)
@@ -311,11 +331,18 @@ class LoginWindow(QWidget):
         self.offline_btn.setEnabled(not busy)
         self.email_input.setEnabled(not busy)
         self.password_input.setEnabled(not busy)
+        self.password_visibility_btn.setEnabled(not busy)
         if message:
             self.status_label.setText(message)
 
-    def _handle_login_invalid(self):
-        self._set_busy_state(False, "Invalid credentials.")
+    def show_login_password(self):
+        self.password_input.setEchoMode(QLineEdit.EchoMode.Normal)
+
+    def hide_login_password(self):
+        self.password_input.setEchoMode(QLineEdit.EchoMode.Password)
+
+    def _handle_login_invalid(self, error_message: str):
+        self._set_busy_state(False, error_message)
 
     def _handle_login_error(self, error_message: str):
         self._set_busy_state(
@@ -326,7 +353,16 @@ class LoginWindow(QWidget):
 
     def _handle_login_success(self, role: str):
         self._set_busy_state(False)
+        authenticated_store = FirebaseStore()
+        authenticated_store.apply_authenticated_context(self.login_worker.auth_context)
+        self.online_store = authenticated_store
         self.open_main_app(self.online_store, role)
+        if self.online_store.last_auth_warning:
+            QMessageBox.warning(
+                self.main_app,
+                "User Profile Warning",
+                self.online_store.last_auth_warning,
+            )
         QTimer.singleShot(0, self.main_app.start_offline_sync)
 
     def _cleanup_login_thread(self):
@@ -339,18 +375,23 @@ class LoginWindow(QWidget):
 
     def open_main_app(self, store, role: str):
         self.hide()
-        self.main_app = ProsthesisApp(store=store, role=role)
+        self.main_app = ProsthesisApp(store=store, role=role, login_window=self)
         self.main_app.show()
 
 
 # ---------------- MAIN APPLICATION ---------------- #
 class ProsthesisApp(QMainWindow):
-    def __init__(self, store, role: str = "prosthetist"):
+    def __init__(self, store, role: str = "prosthetist", login_window=None):
         super().__init__()
         self.store = store
         self.role = role
+        self.login_window = login_window
+        self.is_admin = self.role == "admin"
         self.sync_thread = None
         self.sync_worker = None
+        self.current_record_id = None
+        self.record_lookup = {}
+        self.user_lookup = {}
         self.setWindowTitle(
             f"Prosthesis Sizing App v{APP_VERSION} - {self.store.mode_name.title()} Mode - Role: {self.role}"
         )
@@ -360,22 +401,32 @@ class ProsthesisApp(QMainWindow):
         self.setCentralWidget(self.stack)
 
         self.home_page = self.build_home()
+        self.profile_page = self.build_profile_page()
         self.records_page = self.build_records()
         self.guide_page = self.build_measurement_guide()
+        self.admin_page = self.build_admin_panel() if self.is_admin else None
 
         self.stack.addWidget(self.home_page)
+        self.stack.addWidget(self.profile_page)
         self.stack.addWidget(self.records_page)
         self.stack.addWidget(self.guide_page)
+        if self.admin_page is not None:
+            self.stack.addWidget(self.admin_page)
 
         nav = QWidget()
         nav_layout = QHBoxLayout()
         nav.setLayout(nav_layout)
 
         home_btn = QPushButton("Home")
+        profile_btn = QPushButton("Profile")
         records_btn = QPushButton("Records")
         guide_btn = QPushButton("Measurement Guide")
+        admin_btn = QPushButton("Admin Panel") if self.admin_page is not None else None
+        self.toolbar_logout_btn = QPushButton("Log Out")
+        self.toolbar_logout_btn.clicked.connect(self.log_out)
 
         home_btn.clicked.connect(lambda: self.stack.setCurrentWidget(self.home_page))
+        profile_btn.clicked.connect(self.show_profile_page)
 
         def show_records():
             self.stack.setCurrentWidget(self.records_page)
@@ -383,10 +434,22 @@ class ProsthesisApp(QMainWindow):
 
         records_btn.clicked.connect(show_records)
         guide_btn.clicked.connect(lambda: self.stack.setCurrentWidget(self.guide_page))
+        if admin_btn is not None:
+            admin_btn.clicked.connect(self.show_admin_panel)
 
         nav_layout.addWidget(home_btn)
+        nav_layout.addWidget(profile_btn)
         nav_layout.addWidget(records_btn)
         nav_layout.addWidget(guide_btn)
+        if admin_btn is not None:
+            nav_layout.addWidget(admin_btn)
+        spacer = QWidget()
+        spacer.setSizePolicy(
+            QSizePolicy.Policy.Expanding,
+            QSizePolicy.Policy.Preferred,
+        )
+        nav_layout.addWidget(spacer)
+        nav_layout.addWidget(self.toolbar_logout_btn)
         self.addToolBar("Navigation").addWidget(nav)
 
         mode_message = f"Running in {self.store.mode_name} mode."
@@ -450,6 +513,10 @@ class ProsthesisApp(QMainWindow):
 
         layout.addWidget(QLabel("Enter Patient Measurements:"))
 
+        self.clear_fields_btn = QPushButton("Clear All Fields")
+        self.clear_fields_btn.clicked.connect(self.reset_form)
+        layout.addWidget(self.clear_fields_btn)
+
         self.name_input = QLineEdit()
         layout.addWidget(QLabel("Patient Name:"))
         layout.addWidget(self.name_input)
@@ -480,14 +547,88 @@ class ProsthesisApp(QMainWindow):
         layout.addWidget(QLabel("RadialeStylion Length (mm):"))
         layout.addWidget(self.residuum_input)
 
-        submit_btn = QPushButton("Calculate Size & Save")
-        submit_btn.clicked.connect(self.save_patient_data)
-        layout.addWidget(submit_btn)
+        button_row = QHBoxLayout()
+        self.submit_btn = QPushButton("Calculate")
+        self.submit_btn.clicked.connect(self.calculate_patient_data)
+        button_row.addWidget(self.submit_btn)
+
+        self.cancel_edit_btn = QPushButton("Cancel Edit")
+        self.cancel_edit_btn.clicked.connect(self.reset_form)
+        self.cancel_edit_btn.setVisible(False)
+        button_row.addWidget(self.cancel_edit_btn)
+
+        layout.addLayout(button_row)
 
         page.setLayout(layout)
         return page
 
-    def save_patient_data(self):
+    def build_profile_page(self):
+        page = QWidget()
+        layout = QVBoxLayout()
+
+        layout.addWidget(QLabel("User Profile"))
+
+        email = getattr(self.store, "current_email", "") or "Offline user"
+        role = self.role
+        mode = self.store.mode_name.title()
+
+        self.profile_summary_label = QLabel(
+            f"Signed in as: {email}\nRole: {role}\nMode: {mode}"
+        )
+        self.profile_summary_label.setWordWrap(True)
+        layout.addWidget(self.profile_summary_label)
+
+        self.profile_status_label = QLabel("")
+        self.profile_status_label.setWordWrap(True)
+        layout.addWidget(self.profile_status_label)
+
+        layout.addWidget(QLabel("<b>Create New Password</b>"))
+
+        layout.addWidget(QLabel("New Password:"))
+        password_row = QHBoxLayout()
+        self.profile_password_input = QLineEdit()
+        self.profile_password_input.setEchoMode(QLineEdit.EchoMode.Password)
+        password_row.addWidget(self.profile_password_input)
+
+        self.profile_password_visibility_btn = QPushButton("Show")
+        self.profile_password_visibility_btn.pressed.connect(
+            self.show_profile_passwords
+        )
+        self.profile_password_visibility_btn.released.connect(
+            self.hide_profile_passwords
+        )
+        password_row.addWidget(self.profile_password_visibility_btn)
+        layout.addLayout(password_row)
+
+        layout.addWidget(QLabel("Confirm Password:"))
+        self.profile_confirm_password_input = QLineEdit()
+        self.profile_confirm_password_input.setEchoMode(QLineEdit.EchoMode.Password)
+        layout.addWidget(self.profile_confirm_password_input)
+
+        self.profile_change_password_btn = QPushButton("Change Password")
+        self.profile_change_password_btn.clicked.connect(self.change_password)
+        layout.addWidget(self.profile_change_password_btn)
+
+        if self.store.mode_name != "online":
+            self.profile_status_label.setText(
+                "Password changes are only available in online mode."
+            )
+            self.profile_password_input.setEnabled(False)
+            self.profile_confirm_password_input.setEnabled(False)
+            self.profile_password_visibility_btn.setEnabled(False)
+            self.profile_change_password_btn.setEnabled(False)
+
+        page.setLayout(layout)
+        return page
+
+    def show_profile_page(self):
+        email = getattr(self.store, "current_email", "") or "Offline user"
+        self.profile_summary_label.setText(
+            f"Signed in as: {email}\nRole: {self.role}\nMode: {self.store.mode_name.title()}"
+        )
+        self.stack.setCurrentWidget(self.profile_page)
+
+    def calculate_patient_data(self):
         name = self.name_input.text().strip()
         if not name:
             QMessageBox.warning(self, "Missing Name", "Please enter the patient name.")
@@ -517,20 +658,140 @@ class ProsthesisApp(QMainWindow):
             "sizing_note": result["message"],
         }
 
+        dialog = QMessageBox(self)
+        dialog.setWindowTitle("Sizing Result")
+        dialog.setIcon(QMessageBox.Icon.Information)
+        dialog.setText(
+            f"Width: {result['width']}\n"
+            f"Humeral Length: {result['humeral_length']}\n"
+            f"Radial Length: {result['radial_length']}\n\n"
+            f"{result['message']}\n\n"
+            "Save this result?"
+        )
+        save_button = dialog.addButton("Save", QMessageBox.ButtonRole.AcceptRole)
+        dialog.addButton("Don't Save", QMessageBox.ButtonRole.RejectRole)
+        dialog.exec()
+
+        if dialog.clickedButton() is not save_button:
+            return
+
         try:
-            self.store.save_record(payload)
+            if self.current_record_id is not None:
+                if not self._require_admin(
+                    "Only admins can update existing patient records."
+                ):
+                    return
+                self.store.update_record(self.current_record_id, payload)
+            else:
+                self.store.save_record(payload)
         except Exception as exc:
             QMessageBox.critical(self, "Save Failed", str(exc))
             return
 
+        self.reset_form()
+        if self.stack.currentWidget() == self.records_page:
+            self.load_records()
+
+    def reset_form(self):
+        self.current_record_id = None
+        self.name_input.clear()
+        self.bicep_input.clear()
+        self.forearm_input.clear()
+        self.humerus_input.clear()
+        self.residuum_input.clear()
+        self.submit_btn.setText("Calculate")
+        self.cancel_edit_btn.setVisible(False)
+
+    def log_out(self):
+        confirm = QMessageBox.question(
+            self,
+            "Log Out",
+            "Log out and return to the login screen?",
+        )
+        if confirm != QMessageBox.StandardButton.Yes:
+            return
+
+        self.reset_form()
+        if self.login_window is not None:
+            self.login_window.email_input.clear()
+            self.login_window.password_input.clear()
+            self.login_window.status_label.setText("")
+            self.login_window.show()
+            self.login_window.raise_()
+            self.login_window.activateWindow()
+            self.login_window.main_app = None
+            self.login_window.hide_login_password()
+        self.close()
+
+    def show_profile_passwords(self):
+        echo_mode = QLineEdit.EchoMode.Normal
+        self.profile_password_input.setEchoMode(echo_mode)
+        self.profile_confirm_password_input.setEchoMode(echo_mode)
+
+    def hide_profile_passwords(self):
+        echo_mode = QLineEdit.EchoMode.Password
+        self.profile_password_input.setEchoMode(echo_mode)
+        self.profile_confirm_password_input.setEchoMode(echo_mode)
+
+    def change_password(self):
+        if self.store.mode_name != "online":
+            QMessageBox.warning(
+                self,
+                "Unavailable Offline",
+                "Password changes are only available in online mode.",
+            )
+            return
+
+        new_password = self.profile_password_input.text().strip()
+        confirm_password = self.profile_confirm_password_input.text().strip()
+
+        if len(new_password) < 8:
+            QMessageBox.warning(
+                self,
+                "Invalid Password",
+                "New password must be at least 8 characters long.",
+            )
+            return
+
+        if new_password != confirm_password:
+            QMessageBox.warning(
+                self,
+                "Password Mismatch",
+                "The password confirmation does not match.",
+            )
+            return
+
+        try:
+            self.store.change_current_user_password(new_password)
+        except Exception as exc:
+            QMessageBox.critical(self, "Password Change Failed", str(exc))
+            return
+
+        self.profile_password_input.clear()
+        self.profile_confirm_password_input.clear()
+        self.hide_profile_passwords()
+        self.profile_status_label.setText("Password updated successfully.")
         QMessageBox.information(
             self,
-            "Sizing Result",
-            f"Width: {result['width']}\n"
-            f"Humeral Length: {result['humeral_length']}\n"
-            f"Radial Length: {result['radial_length']}\n\n"
-            f"{result['message']}"
+            "Password Updated",
+            "Your password has been updated successfully.",
         )
+
+    def _load_record_into_form(self, record_id: str):
+        record = self.record_lookup.get(record_id)
+        if not record:
+            QMessageBox.warning(self, "Record Missing", "The selected record could not be loaded.")
+            return
+
+        self.current_record_id = record_id
+        self.name_input.setText(record.get("name", ""))
+        self.bicep_input.setText(str(record.get("bicep_circ", "")))
+        self.forearm_input.setText(str(record.get("forearm_circ", "")))
+        self.humerus_input.setText(str(record.get("humerus_len", "")))
+        self.residuum_input.setText(str(record.get("residuum_len", "")))
+        self.submit_btn.setText("Update Record")
+        self.cancel_edit_btn.setVisible(True)
+        self.stack.setCurrentWidget(self.home_page)
 
     # ---------------- RECORDS PAGE ---------------- #
     def build_records(self):
@@ -547,6 +808,9 @@ class ProsthesisApp(QMainWindow):
         search_layout = QHBoxLayout()
         search_layout.addWidget(self.search_input)
         search_layout.addWidget(search_btn)
+        refresh_btn = QPushButton("Refresh")
+        refresh_btn.clicked.connect(self.load_records)
+        search_layout.addWidget(refresh_btn)
 
         self.table = QTableWidget()
         self.table.setColumnCount(8)
@@ -560,6 +824,18 @@ class ProsthesisApp(QMainWindow):
 
         layout.addLayout(search_layout)
         layout.addWidget(self.table)
+
+        admin_actions = QHBoxLayout()
+        self.edit_record_btn = QPushButton("Edit Selected")
+        self.edit_record_btn.clicked.connect(self.edit_selected_record)
+        self.delete_record_btn = QPushButton("Delete Selected")
+        self.delete_record_btn.clicked.connect(self.delete_selected_record)
+        self.edit_record_btn.setVisible(self.is_admin)
+        self.delete_record_btn.setVisible(self.is_admin)
+        admin_actions.addWidget(self.edit_record_btn)
+        admin_actions.addWidget(self.delete_record_btn)
+        layout.addLayout(admin_actions)
+
         page.setLayout(layout)
         return page
 
@@ -579,8 +855,10 @@ class ProsthesisApp(QMainWindow):
 
     def display_records(self, records):
         self.table.setRowCount(0)
+        self.record_lookup = {}
         for row_index, record in enumerate(records):
             data = record.to_dict()
+            self.record_lookup[record.id] = data
             self.table.insertRow(row_index)
             self.table.setItem(row_index, 0, QTableWidgetItem(record.id))
             self.table.setItem(row_index, 1, QTableWidgetItem(data.get("name", "")))
@@ -601,6 +879,175 @@ class ProsthesisApp(QMainWindow):
             )
             self.table.setItem(
                 row_index, 7, QTableWidgetItem(data.get("sizing_note", ""))
+            )
+
+    def _selected_table_id(self, table: QTableWidget) -> str | None:
+        row_index = table.currentRow()
+        if row_index < 0:
+            return None
+
+        item = table.item(row_index, 0)
+        if item is None:
+            return None
+        return item.text()
+
+    def _require_admin(self, message: str) -> bool:
+        if self.is_admin:
+            return True
+
+        QMessageBox.warning(self, "Access Denied", message)
+        return False
+
+    def edit_selected_record(self):
+        if not self._require_admin("Only admins can edit patient records."):
+            return
+
+        record_id = self._selected_table_id(self.table)
+        if not record_id:
+            QMessageBox.information(self, "Select Record", "Select a record to edit.")
+            return
+
+        self._load_record_into_form(record_id)
+
+    def delete_selected_record(self):
+        if not self._require_admin("Only admins can delete patient records."):
+            return
+
+        record_id = self._selected_table_id(self.table)
+        if not record_id:
+            QMessageBox.information(self, "Select Record", "Select a record to delete.")
+            return
+
+        confirm = QMessageBox.question(
+            self,
+            "Delete Record",
+            "Delete the selected patient record?",
+        )
+        if confirm != QMessageBox.StandardButton.Yes:
+            return
+
+        try:
+            self.store.delete_record(record_id)
+        except Exception as exc:
+            QMessageBox.critical(self, "Delete Failed", str(exc))
+            return
+
+        if self.current_record_id == record_id:
+            self.reset_form()
+        self.load_records()
+
+    # ---------------- ADMIN PAGE ---------------- #
+    def build_admin_panel(self):
+        page = QWidget()
+        layout = QVBoxLayout()
+
+        layout.addWidget(QLabel("Provision Firebase Authentication users and RBAC profiles."))
+
+        layout.addWidget(QLabel("Email:"))
+        self.admin_email_input = QLineEdit()
+        layout.addWidget(self.admin_email_input)
+
+        layout.addWidget(QLabel("Temporary Password:"))
+        self.admin_password_input = QLineEdit()
+        self.admin_password_input.setEchoMode(QLineEdit.EchoMode.Password)
+        layout.addWidget(self.admin_password_input)
+
+        layout.addWidget(QLabel("Role:"))
+        self.admin_role_input = QComboBox()
+        self.admin_role_input.addItems(["user", "admin"])
+        layout.addWidget(self.admin_role_input)
+
+        self.admin_active_checkbox = QCheckBox("Active")
+        self.admin_active_checkbox.setChecked(True)
+        layout.addWidget(self.admin_active_checkbox)
+
+        create_user_btn = QPushButton("Create User")
+        create_user_btn.clicked.connect(self.create_admin_user)
+        layout.addWidget(create_user_btn)
+
+        layout.addWidget(QLabel("Existing User Profiles:"))
+        self.user_table = QTableWidget()
+        self.user_table.setColumnCount(4)
+        self.user_table.setHorizontalHeaderLabels(["UID", "Email", "Role", "Active"])
+        self.user_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.user_table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self.user_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        layout.addWidget(self.user_table)
+
+        refresh_users_btn = QPushButton("Refresh Users")
+        refresh_users_btn.clicked.connect(self.refresh_user_profiles)
+        layout.addWidget(refresh_users_btn)
+
+        page.setLayout(layout)
+        return page
+
+    def show_admin_panel(self):
+        if not self._require_admin("Only admins can open the Admin Panel."):
+            return
+
+        self.stack.setCurrentWidget(self.admin_page)
+        self.refresh_user_profiles()
+
+    def create_admin_user(self):
+        if not self._require_admin("Only admins can create users."):
+            return
+
+        email = self.admin_email_input.text().strip().lower()
+        password = self.admin_password_input.text().strip()
+        role = self.admin_role_input.currentText()
+        active = self.admin_active_checkbox.isChecked()
+
+        if "@" not in email:
+            QMessageBox.warning(self, "Invalid Email", "Enter a valid email address.")
+            return
+
+        if len(password) < 8:
+            QMessageBox.warning(
+                self,
+                "Invalid Password",
+                "Temporary password must be at least 8 characters long.",
+            )
+            return
+
+        try:
+            uid = self.store.create_user_account(email, password, role, active)
+        except Exception as exc:
+            QMessageBox.critical(self, "Create User Failed", str(exc))
+            return
+
+        QMessageBox.information(
+            self,
+            "User Created",
+            f"Created Firebase user {email} with UID {uid}.",
+        )
+        self.admin_email_input.clear()
+        self.admin_password_input.clear()
+        self.admin_role_input.setCurrentText("user")
+        self.admin_active_checkbox.setChecked(True)
+        self.reset_form()
+        self.refresh_user_profiles()
+
+    def refresh_user_profiles(self):
+        if not self._require_admin("Only admins can manage user profiles."):
+            return
+
+        try:
+            profiles = self.store.list_user_profiles()
+        except Exception as exc:
+            QMessageBox.critical(self, "Load Users Failed", str(exc))
+            return
+
+        self.user_lookup = {profile["uid"]: profile for profile in profiles}
+        self.user_table.setRowCount(0)
+        for row_index, profile in enumerate(profiles):
+            self.user_table.insertRow(row_index)
+            self.user_table.setItem(row_index, 0, QTableWidgetItem(profile["uid"]))
+            self.user_table.setItem(row_index, 1, QTableWidgetItem(profile["email"]))
+            self.user_table.setItem(row_index, 2, QTableWidgetItem(profile["role"]))
+            self.user_table.setItem(
+                row_index,
+                3,
+                QTableWidgetItem("Yes" if profile["active"] else "No"),
             )
 
     # ---------------- GUIDE PAGE ---------------- #
