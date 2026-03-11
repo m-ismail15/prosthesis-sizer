@@ -152,13 +152,15 @@ class OfflineSyncWorker(QObject):
     finished = pyqtSignal(object)
     error = pyqtSignal(str)
 
-    def __init__(self, offline_store):
+    def __init__(self, offline_store, auth_context: dict | None = None):
         super().__init__()
         self.offline_store = offline_store
+        self.auth_context = auth_context or {}
 
     def run(self):
         try:
             online_store = FirebaseStore()
+            online_store.apply_authenticated_context(self.auth_context)
             sync_result = self.offline_store.sync_pending_records(online_store)
             self.finished.emit(sync_result)
         except Exception as exc:
@@ -174,7 +176,12 @@ class LoginWindow(QWidget):
 
         self.online_store = None
         self.online_error = ""
-        self.offline_store = LocalJsonStore(default_local_store_path())
+        self.last_online_context = {}
+        self.offline_store = LocalJsonStore(
+            default_local_store_path(),
+            clinic_id=None,
+        )
+        self.offline_store.apply_authenticated_context(self.last_online_context)
         self.login_thread = None
         self.login_worker = None
 
@@ -285,7 +292,14 @@ class LoginWindow(QWidget):
 
     def open_offline_mode(self):
         try:
-            self.open_main_app(self.offline_store, "prosthetist")
+            clinic_id = getattr(self.offline_store, "current_clinic_id", None)
+            if not clinic_id:
+                QMessageBox.warning(
+                    self,
+                    "Clinic Required",
+                    "Offline mode is available. You must enter a clinic ID when saving an offline record.",
+                )
+            self.open_main_app(self.offline_store, "prosthetist", clinic_id=clinic_id)
         except StorageError as exc:
             QMessageBox.critical(self, "Offline Mode Error", str(exc))
 
@@ -356,7 +370,13 @@ class LoginWindow(QWidget):
         authenticated_store = FirebaseStore()
         authenticated_store.apply_authenticated_context(self.login_worker.auth_context)
         self.online_store = authenticated_store
-        self.open_main_app(self.online_store, role)
+        self.last_online_context = self.online_store.get_authenticated_context()
+        self.offline_store.apply_authenticated_context(self.last_online_context)
+        self.open_main_app(
+            self.online_store,
+            role,
+            clinic_id=self.last_online_context.get("clinic_id"),
+        )
         if self.online_store.last_auth_warning:
             QMessageBox.warning(
                 self.main_app,
@@ -373,18 +393,30 @@ class LoginWindow(QWidget):
         self.login_worker = None
         self.login_thread = None
 
-    def open_main_app(self, store, role: str):
+    def open_main_app(self, store, role: str, clinic_id: str | None = None):
         self.hide()
-        self.main_app = ProsthesisApp(store=store, role=role, login_window=self)
+        self.main_app = ProsthesisApp(
+            store=store,
+            role=role,
+            clinic_id=clinic_id,
+            login_window=self,
+        )
         self.main_app.show()
 
 
 # ---------------- MAIN APPLICATION ---------------- #
 class ProsthesisApp(QMainWindow):
-    def __init__(self, store, role: str = "prosthetist", login_window=None):
+    def __init__(
+        self,
+        store,
+        role: str = "prosthetist",
+        clinic_id: str | None = None,
+        login_window=None,
+    ):
         super().__init__()
         self.store = store
         self.role = role
+        self.clinic_id = clinic_id or getattr(self.store, "current_clinic_id", None)
         self.login_window = login_window
         self.is_admin = self.role == "admin"
         self.sync_thread = None
@@ -392,9 +424,7 @@ class ProsthesisApp(QMainWindow):
         self.current_record_id = None
         self.record_lookup = {}
         self.user_lookup = {}
-        self.setWindowTitle(
-            f"Prosthesis Sizing App v{APP_VERSION} - {self.store.mode_name.title()} Mode - Role: {self.role}"
-        )
+        self._refresh_window_title()
         self.setGeometry(100, 100, 900, 600)
 
         self.stack = QStackedWidget()
@@ -452,15 +482,51 @@ class ProsthesisApp(QMainWindow):
         nav_layout.addWidget(self.toolbar_logout_btn)
         self.addToolBar("Navigation").addWidget(nav)
 
-        mode_message = f"Running in {self.store.mode_name} mode."
+        self.statusBar().showMessage(self._mode_status_message())
+
+    def _refresh_window_title(self):
+        self.setWindowTitle(
+            f"Prosthesis Sizing App v{APP_VERSION} - {self.store.mode_name.title()} Mode "
+            f"- Role: {self.role} - Clinic: {self.clinic_id or 'Unassigned'}"
+        )
+
+    def _mode_status_message(self) -> str:
+        message = f"Running in {self.store.mode_name} mode."
         if self.store.mode_name == "offline":
-            mode_message += (
+            message += (
                 " Pending records stay in a temporary local queue until they are synced online."
                 f" Queue file: {default_local_store_path()}"
             )
         else:
-            mode_message += f" Firebase key search includes: {user_config_dir()}"
-        self.statusBar().showMessage(mode_message)
+            message += f" Firebase key search includes: {user_config_dir()}"
+        message += f" Current clinic: {self.clinic_id or 'Unassigned'}."
+        return message
+
+    def _profile_summary_text(self) -> str:
+        email = getattr(self.store, "current_email", "") or "Offline user"
+        return (
+            f"Signed in as: {email}\nRole: {self.role}\n"
+            f"Clinic: {self.clinic_id or 'Unassigned'}\nMode: {self.store.mode_name.title()}"
+        )
+
+    def _set_clinic_context(self, clinic_id: str | None) -> None:
+        normalized = (clinic_id or "").strip() or None
+        self.clinic_id = normalized
+        if hasattr(self.store, "current_clinic_id"):
+            self.store.current_clinic_id = normalized
+
+        self._refresh_window_title()
+        self.statusBar().showMessage(self._mode_status_message())
+        if hasattr(self, "profile_summary_label"):
+            self.profile_summary_label.setText(self._profile_summary_text())
+        if (
+            self.store.mode_name == "offline"
+            and hasattr(self, "offline_clinic_input")
+            and normalized
+        ):
+            self.offline_clinic_input.setText(normalized)
+            # Once chosen offline, keep session clinic stable to avoid mixed-clinic queues.
+            self.offline_clinic_input.setReadOnly(True)
 
     def start_offline_sync(self):
         if self.store.mode_name != "online" or self.sync_thread is not None:
@@ -468,7 +534,15 @@ class ProsthesisApp(QMainWindow):
 
         self.statusBar().showMessage("Checking for queued offline records to sync...")
         self.sync_thread = QThread(self)
-        self.sync_worker = OfflineSyncWorker(LocalJsonStore(default_local_store_path()))
+        auth_context = (
+            self.store.get_authenticated_context()
+            if hasattr(self.store, "get_authenticated_context")
+            else {}
+        )
+        self.sync_worker = OfflineSyncWorker(
+            LocalJsonStore(default_local_store_path()),
+            auth_context=auth_context,
+        )
         self.sync_worker.moveToThread(self.sync_thread)
 
         self.sync_thread.started.connect(self.sync_worker.run)
@@ -491,6 +565,16 @@ class ProsthesisApp(QMainWindow):
             )
             return
 
+        error_text = "\n".join(sync_result["errors"][:3])
+        if len(sync_result["errors"]) > 3:
+            error_text += "\n..."
+
+        QMessageBox.warning(
+            self,
+            "Offline Sync Incomplete",
+            f"Synced {sync_result['synced_count']} of {sync_result['pending_count']} offline record(s).\n\n"
+            f"Skipped records:\n{error_text}",
+        )
         self.statusBar().showMessage(
             f"Synced {sync_result['synced_count']} of {sync_result['pending_count']} offline record(s)."
         )
@@ -520,6 +604,19 @@ class ProsthesisApp(QMainWindow):
         self.name_input = QLineEdit()
         layout.addWidget(QLabel("Patient Name:"))
         layout.addWidget(self.name_input)
+
+        self.offline_clinic_label = QLabel("Clinic ID (required offline):")
+        self.offline_clinic_input = QLineEdit()
+        self.offline_clinic_input.setPlaceholderText("Enter clinic ID")
+        if self.store.mode_name == "online":
+            self.offline_clinic_label.setVisible(False)
+            self.offline_clinic_input.setVisible(False)
+        else:
+            if self.clinic_id:
+                self.offline_clinic_input.setText(self.clinic_id)
+                self.offline_clinic_input.setReadOnly(True)
+        layout.addWidget(self.offline_clinic_label)
+        layout.addWidget(self.offline_clinic_input)
 
         self.bicep_input = QLineEdit()
         self.forearm_input = QLineEdit()
@@ -568,13 +665,7 @@ class ProsthesisApp(QMainWindow):
 
         layout.addWidget(QLabel("User Profile"))
 
-        email = getattr(self.store, "current_email", "") or "Offline user"
-        role = self.role
-        mode = self.store.mode_name.title()
-
-        self.profile_summary_label = QLabel(
-            f"Signed in as: {email}\nRole: {role}\nMode: {mode}"
-        )
+        self.profile_summary_label = QLabel(self._profile_summary_text())
         self.profile_summary_label.setWordWrap(True)
         layout.addWidget(self.profile_summary_label)
 
@@ -622,13 +713,40 @@ class ProsthesisApp(QMainWindow):
         return page
 
     def show_profile_page(self):
-        email = getattr(self.store, "current_email", "") or "Offline user"
-        self.profile_summary_label.setText(
-            f"Signed in as: {email}\nRole: {self.role}\nMode: {self.store.mode_name.title()}"
-        )
+        self.profile_summary_label.setText(self._profile_summary_text())
         self.stack.setCurrentWidget(self.profile_page)
 
     def calculate_patient_data(self):
+        clinic_id = self.clinic_id
+        if self.store.mode_name == "offline":
+            entered_clinic_id = self.offline_clinic_input.text().strip()
+            if entered_clinic_id:
+                clinic_id = entered_clinic_id
+            if self.clinic_id and clinic_id != self.clinic_id:
+                QMessageBox.warning(
+                    self,
+                    "Clinic Locked",
+                    f"Offline session is using clinic '{self.clinic_id}'. "
+                    "Start a new session to use a different clinic.",
+                )
+                return
+            if not clinic_id:
+                QMessageBox.warning(
+                    self,
+                    "Clinic Required",
+                    "Enter a clinic ID before saving an offline record.",
+                )
+                return
+            if clinic_id != self.clinic_id:
+                self._set_clinic_context(clinic_id)
+        elif not clinic_id:
+            QMessageBox.warning(
+                self,
+                "Clinic Required",
+                "This session has no clinic assignment, so records cannot be saved.",
+            )
+            return
+
         name = self.name_input.text().strip()
         if not name:
             QMessageBox.warning(self, "Missing Name", "Please enter the patient name.")
@@ -648,6 +766,7 @@ class ProsthesisApp(QMainWindow):
         payload = {
             "name": name,
             "name_lower": name.lower(),
+            "clinic_id": clinic_id,
             "bicep_circ": bc,
             "forearm_circ": fc,
             "humerus_len": ar,
@@ -957,6 +1076,11 @@ class ProsthesisApp(QMainWindow):
         self.admin_role_input.addItems(["user", "admin"])
         layout.addWidget(self.admin_role_input)
 
+        layout.addWidget(QLabel("Clinic ID:"))
+        self.admin_clinic_input = QLineEdit()
+        self.admin_clinic_input.setPlaceholderText("e.g. ti-clinic")
+        layout.addWidget(self.admin_clinic_input)
+
         self.admin_active_checkbox = QCheckBox("Active")
         self.admin_active_checkbox.setChecked(True)
         layout.addWidget(self.admin_active_checkbox)
@@ -967,8 +1091,10 @@ class ProsthesisApp(QMainWindow):
 
         layout.addWidget(QLabel("Existing User Profiles:"))
         self.user_table = QTableWidget()
-        self.user_table.setColumnCount(4)
-        self.user_table.setHorizontalHeaderLabels(["UID", "Email", "Role", "Active"])
+        self.user_table.setColumnCount(5)
+        self.user_table.setHorizontalHeaderLabels(
+            ["UID", "Email", "Role", "Active", "Clinic ID"]
+        )
         self.user_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.user_table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self.user_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
@@ -995,6 +1121,7 @@ class ProsthesisApp(QMainWindow):
         email = self.admin_email_input.text().strip().lower()
         password = self.admin_password_input.text().strip()
         role = self.admin_role_input.currentText()
+        clinic_id = self.admin_clinic_input.text().strip()
         active = self.admin_active_checkbox.isChecked()
 
         if "@" not in email:
@@ -1009,8 +1136,12 @@ class ProsthesisApp(QMainWindow):
             )
             return
 
+        if not clinic_id:
+            QMessageBox.warning(self, "Missing Clinic", "Enter a clinic ID.")
+            return
+
         try:
-            uid = self.store.create_user_account(email, password, role, active)
+            uid = self.store.create_user_account(email, password, role, clinic_id, active)
         except Exception as exc:
             QMessageBox.critical(self, "Create User Failed", str(exc))
             return
@@ -1023,6 +1154,7 @@ class ProsthesisApp(QMainWindow):
         self.admin_email_input.clear()
         self.admin_password_input.clear()
         self.admin_role_input.setCurrentText("user")
+        self.admin_clinic_input.clear()
         self.admin_active_checkbox.setChecked(True)
         self.reset_form()
         self.refresh_user_profiles()
@@ -1048,6 +1180,9 @@ class ProsthesisApp(QMainWindow):
                 row_index,
                 3,
                 QTableWidgetItem("Yes" if profile["active"] else "No"),
+            )
+            self.user_table.setItem(
+                row_index, 4, QTableWidgetItem(profile.get("clinic_id", ""))
             )
 
     # ---------------- GUIDE PAGE ---------------- #
