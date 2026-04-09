@@ -1,10 +1,11 @@
 # Desktop GUI
 import os
 import sys
+from datetime import datetime
 
 from auth_client import is_firebase_auth_configured
-from PyQt6.QtCore import QObject, QElapsedTimer, QThread, Qt, QTimer, pyqtSignal
-from PyQt6.QtGui import QColor, QDoubleValidator, QFont, QLinearGradient, QPainter, QPen, QPixmap
+from PyQt6.QtCore import QObject, QElapsedTimer, QRegularExpression, QThread, Qt, QTimer, pyqtSignal
+from PyQt6.QtGui import QColor, QFont, QLinearGradient, QPainter, QPen, QPixmap, QRegularExpressionValidator
 from PyQt6.QtWidgets import (QAbstractItemView, QApplication, QCheckBox, QComboBox, QHBoxLayout, QHeaderView, QLabel, QLineEdit,
     QMainWindow, QMessageBox, QPushButton, QScrollArea, QSizePolicy, QSplashScreen, QStackedWidget, QTableWidget,
     QTableWidgetItem, QVBoxLayout, QWidget,
@@ -245,7 +246,8 @@ class LoginWindow(QWidget):
 
         if self.online_store is not None:
             self.status_label.setText(
-                "Online mode is available. Continue Offline keeps records in a temporary local queue until they are synced online."
+                "Online mode is available. Continue Offline keeps records in a temporary local queue until they are synced online. "
+                "Enter a clinic ID when saving an offline record."
             )
         else:
             self.status_label.setText(
@@ -293,12 +295,6 @@ class LoginWindow(QWidget):
     def open_offline_mode(self):
         try:
             clinic_id = getattr(self.offline_store, "current_clinic_id", None)
-            if not clinic_id:
-                QMessageBox.warning(
-                    self,
-                    "Clinic Required",
-                    "Offline mode is available. You must enter a clinic ID when saving an offline record.",
-                )
             self.open_main_app(self.offline_store, "prosthetist", clinic_id=clinic_id)
         except StorageError as exc:
             QMessageBox.critical(self, "Offline Mode Error", str(exc))
@@ -623,7 +619,11 @@ class ProsthesisApp(QMainWindow):
         self.humerus_input = QLineEdit()
         self.residuum_input = QLineEdit()
 
-        validator = QDoubleValidator(0.0, 10000.0, 2, parent=self)
+        # Allow up to one decimal place using either "." or ",".
+        validator = QRegularExpressionValidator(
+            QRegularExpression(r"^\d{0,5}(?:[.,]\d{0,1})?$"),
+            self,
+        )
         for field in [
             self.bicep_input,
             self.forearm_input,
@@ -716,6 +716,25 @@ class ProsthesisApp(QMainWindow):
         self.profile_summary_label.setText(self._profile_summary_text())
         self.stack.setCurrentWidget(self.profile_page)
 
+    def _parse_measurement_value(self, text: str, label: str) -> float:
+        normalized = text.strip().replace(",", ".")
+        if not normalized:
+            raise ValueError(f"{label} is required.")
+        if normalized.count(".") > 1:
+            raise ValueError(f"{label} must be a valid number.")
+        if "." in normalized and len(normalized.split(".", 1)[1]) > 1:
+            raise ValueError(f"{label} may have at most one decimal place.")
+
+        try:
+            value = float(normalized)
+        except ValueError as exc:
+            raise ValueError(f"{label} must be a valid number.") from exc
+
+        if value < 0 or value > 10000:
+            raise ValueError(f"{label} must be between 0 and 10000.")
+
+        return value
+
     def calculate_patient_data(self):
         clinic_id = self.clinic_id
         if self.store.mode_name == "offline":
@@ -753,12 +772,20 @@ class ProsthesisApp(QMainWindow):
             return
 
         try:
-            bc = float(self.bicep_input.text())
-            fc = float(self.forearm_input.text())
-            ar = float(self.humerus_input.text())
-            rs = float(self.residuum_input.text())
-        except ValueError:
-            QMessageBox.warning(self, "Invalid Input", "Please enter valid measurements.")
+            bc = self._parse_measurement_value(
+                self.bicep_input.text(), "Flexed Bicep Circumference"
+            )
+            fc = self._parse_measurement_value(
+                self.forearm_input.text(), "Flexed Forearm Circumference"
+            )
+            ar = self._parse_measurement_value(
+                self.humerus_input.text(), "AcromioRadiale Length"
+            )
+            rs = self._parse_measurement_value(
+                self.residuum_input.text(), "RadialeStylion Length"
+            )
+        except ValueError as exc:
+            QMessageBox.warning(self, "Invalid Input", str(exc))
             return
 
         result = compute_prosthesis_size(bc, fc, ar, rs)
@@ -932,9 +959,9 @@ class ProsthesisApp(QMainWindow):
         search_layout.addWidget(refresh_btn)
 
         self.table = QTableWidget()
-        self.table.setColumnCount(8)
+        self.table.setColumnCount(9)
         self.table.setHorizontalHeaderLabels(
-            ["ID", "Name", "BC", "FC", "Width", "Hum Len", "Rad Len", "Note"]
+            ["ID", "Name", "BC", "FC", "Width", "Hum Len", "Rad Len", "Created/Updated", "Note"]
         )
         self.table.setColumnHidden(0, True)
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
@@ -997,8 +1024,39 @@ class ProsthesisApp(QMainWindow):
                 row_index, 6, QTableWidgetItem(str(data.get("radial_length", "")))
             )
             self.table.setItem(
-                row_index, 7, QTableWidgetItem(data.get("sizing_note", ""))
+                row_index, 7, QTableWidgetItem(self._format_record_timestamp(data))
             )
+            note_value = data.get("sizing_note")
+            note_text = str(note_value).strip() if note_value is not None else ""
+            if not note_text:
+                note_text = "None"
+            self.table.setItem(
+                row_index, 8, QTableWidgetItem(note_text)
+            )
+
+    def _format_record_timestamp(self, data: dict) -> str:
+        timestamp_value = data.get("updated_at") or data.get("created_at")
+        if timestamp_value is None:
+            return "N/A"
+
+        if hasattr(timestamp_value, "to_pydatetime"):
+            try:
+                timestamp_value = timestamp_value.to_pydatetime()
+            except Exception:
+                pass
+
+        if isinstance(timestamp_value, datetime):
+            return timestamp_value.strftime("%Y-%m-%d %H:%M")
+
+        timestamp_text = str(timestamp_value).strip()
+        if not timestamp_text:
+            return "N/A"
+
+        try:
+            parsed = datetime.fromisoformat(timestamp_text.replace("Z", "+00:00"))
+            return parsed.strftime("%Y-%m-%d %H:%M")
+        except ValueError:
+            return timestamp_text
 
     def _selected_table_id(self, table: QTableWidget) -> str | None:
         row_index = table.currentRow()

@@ -20,6 +20,9 @@
 
     <Icon Id="AppIcon.ico" SourceFile="$(var.ProjectRoot)\MedTechLogo.ico" />
     <Property Id="ARPPRODUCTICON" Value="AppIcon.ico" />
+    <WixVariable Id="WixUILicenseRtf" Value="$(var.ProjectRoot)\installer\License.rtf" />
+    <UIRef Id="WixUI_Minimal" />
+    <UIRef Id="WixUI_ErrorProgressText" />
 
     <Directory Id="TARGETDIR" Name="SourceDir">
       <Directory Id="ProgramFiles64Folder">
@@ -68,6 +71,12 @@
           <File Id="FilImageRS" Source="$(var.StagingDir)\images\RSLength.png" KeyPath="yes" />
         </Component>
       </Directory>
+
+      <Directory Id="ConfigFolder" Name="config">
+        <Component Id="CmpServiceAccountKey" Guid="6B8616B3-ACD8-4F45-BB80-34AEFEEA68AD" Win64="yes">
+          <File Id="FilServiceAccountKey" Source="$(var.StagingDir)\config\serviceAccountKey.json" KeyPath="yes" />
+        </Component>
+      </Directory>
     </DirectoryRef>
 
     <DirectoryRef Id="ApplicationProgramsFolder">
@@ -99,6 +108,7 @@
       <ComponentRef Id="CmpImageBC" />
       <ComponentRef Id="CmpImageFC" />
       <ComponentRef Id="CmpImageRS" />
+      <ComponentRef Id="CmpServiceAccountKey" />
       <ComponentRef Id="CmpShortcut" />
     </Feature>
   </Product>

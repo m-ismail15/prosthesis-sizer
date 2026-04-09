@@ -11,6 +11,7 @@ $StagingDir = Join-Path $ProjectRoot "build\msi_staging"
 $ObjectDir = Join-Path $ProjectRoot "build\msi_obj"
 $OutputDir = Join-Path $ProjectRoot "build\msi"
 $InstallerSource = Join-Path $ProjectRoot "installer\ProsthesisSizingApp.wxs"
+$LicenseSource = Join-Path $ProjectRoot "installer\License.rtf"
 $VersionSource = Join-Path $ProjectRoot "app_version.py"
 
 $AppExe = Join-Path $DistDir "app.exe"
@@ -19,9 +20,10 @@ $ReadmeSource = Join-Path $ProjectRoot "README.md"
 $InstallGuideSource = Join-Path $ProjectRoot "INSTALL.txt"
 $IconSource = Join-Path $ProjectRoot "MedTechLogo.ico"
 $SplashBackgroundSource = Join-Path $ProjectRoot "MedTechBG.png"
+$ServiceAccountKeySource = Join-Path $DistDir "config\serviceAccountKey.json"
 
 # ---------------- VALIDATION ---------------- #
-foreach ($RequiredPath in @($ImagesDir, $ReadmeSource, $InstallGuideSource, $IconSource, $SplashBackgroundSource, $InstallerSource, $VersionSource)) {
+foreach ($RequiredPath in @($ImagesDir, $ReadmeSource, $InstallGuideSource, $IconSource, $SplashBackgroundSource, $InstallerSource, $LicenseSource, $VersionSource)) {
     if (-not (Test-Path $RequiredPath)) {
         throw "Required installer input not found: $RequiredPath"
     }
@@ -39,6 +41,10 @@ if (-not (Test-Path $AppExe)) {
     throw "Missing build artifact: $AppExe. Run scripts\\build_app.ps1 before building the MSI."
 }
 
+if (-not (Test-Path $ServiceAccountKeySource)) {
+    throw "Missing Firebase key for installer packaging: $ServiceAccountKeySource"
+}
+
 # ---------------- STAGING ---------------- #
 if (Test-Path $StagingDir) {
     Remove-Item $StagingDir -Recurse -Force
@@ -46,6 +52,7 @@ if (Test-Path $StagingDir) {
 
 New-Item -ItemType Directory -Path $StagingDir | Out-Null
 New-Item -ItemType Directory -Path (Join-Path $StagingDir "images") | Out-Null
+New-Item -ItemType Directory -Path (Join-Path $StagingDir "config") | Out-Null
 New-Item -ItemType Directory -Path $ObjectDir -Force | Out-Null
 New-Item -ItemType Directory -Path $OutputDir -Force | Out-Null
 
@@ -55,6 +62,7 @@ Copy-Item $SplashBackgroundSource (Join-Path $StagingDir "MedTechBG.png")
 Copy-Item $ReadmeSource (Join-Path $StagingDir "README.txt")
 Copy-Item $InstallGuideSource (Join-Path $StagingDir "INSTALL.txt")
 Copy-Item (Join-Path $ImagesDir "*") (Join-Path $StagingDir "images") -Recurse
+Copy-Item $ServiceAccountKeySource (Join-Path $StagingDir "config\serviceAccountKey.json")
 
 # ---------------- WIX DISCOVERY ---------------- #
 $CandleCandidates = @(
@@ -85,6 +93,7 @@ $WixObj = Join-Path $ObjectDir "ProsthesisSizingApp.wixobj"
 $MsiOut = Join-Path $OutputDir ("ProsthesisSizingApp_" + $Version + ".msi")
 
 & $Candle `
+    "-ext" "WixUIExtension" `
     "-dVersion=$Version" `
     "-dProjectRoot=$ProjectRoot" `
     "-dStagingDir=$StagingDir" `
@@ -92,6 +101,8 @@ $MsiOut = Join-Path $OutputDir ("ProsthesisSizingApp_" + $Version + ".msi")
     $InstallerSource
 
 & $Light `
+    "-ext" "WixUIExtension" `
+    "-sval" `
     "-out" $MsiOut `
     $WixObj
 
