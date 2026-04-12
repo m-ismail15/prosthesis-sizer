@@ -36,6 +36,8 @@ FC_REP_VALUES = {
     "XL": 303.21,
 }
 
+#Input variability thresholds for borderline classification, set at half the bin width for each bin. 
+#sigma_anth = 0.02 * Median bin value
 BC_SIGMA_INPUT = {
     "XS": 7.307,
     "S": 7.755,
@@ -44,16 +46,19 @@ BC_SIGMA_INPUT = {
     "XL": 9.180,
 }
 
+#sigma-anth = 0.03 * Median bin value
 FC_SIGMA_INPUT = {
-    "XS": 12.115,
-    "S": 12.973,
-    "M": 13.838,
-    "L": 14.710,
-    "XL": 15.587,
+    "XS": 8.102,
+    "S": 8.567,
+    "M": 9.041,
+    "L": 9.524,
+    "XL": 10.014,
 }
 
 BC_BOUNDARY_TOL = {label: sigma / 2 for label, sigma in BC_SIGMA_INPUT.items()}
 FC_BOUNDARY_TOL = {label: sigma / 2 for label, sigma in FC_SIGMA_INPUT.items()}
+AR_BOUNDARY_TOL = 1.6105
+RS_BOUNDARY_TOL = 2.149
 
 AR_BINS = {
     1: (293, 306.6),
@@ -144,6 +149,24 @@ def get_adjacent_size(bin_label, boundary_side):
         if index == len(WIDTH_ORDER) - 1:
             return None
         return WIDTH_ORDER[index + 1]
+    return None
+
+
+def get_adjacent_length_bin(bin_label, boundary_side, bins):
+    """Return adjacent length bin by boundary side, or None if unavailable."""
+    ordered_bins = list(bins.keys())
+    if bin_label not in ordered_bins:
+        return None
+
+    index = ordered_bins.index(bin_label)
+    if boundary_side == "lower":
+        if index == 0:
+            return None
+        return ordered_bins[index - 1]
+    if boundary_side == "upper":
+        if index == len(ordered_bins) - 1:
+            return None
+        return ordered_bins[index + 1]
     return None
 
 
@@ -305,16 +328,139 @@ def determine_length(value, bins):
     return max(matches)
 
 
+def classify_length_measurement(value, bins, tolerance):
+    """Classify a length measurement as clear, borderline, or out_of_range."""
+    bin_items = list(bins.items())
+    if not bin_items:
+        return "out_of_range", None, None, None, tolerance
+
+    min_val = bin_items[0][1][0]
+    max_val = bin_items[-1][1][1]
+    if value < min_val or value > max_val:
+        return "out_of_range", None, None, None, tolerance
+
+    assigned_bin = determine_length(value, bins)
+    if assigned_bin is None:
+        return "out_of_range", None, None, None, tolerance
+
+    bin_lower, bin_upper = bins[assigned_bin]
+    dist_low = value - bin_lower
+    dist_high = bin_upper - value
+
+    if dist_low <= tolerance:
+        return "borderline", assigned_bin, "lower", dist_low, tolerance
+    if dist_high <= tolerance:
+        return "borderline", assigned_bin, "upper", dist_high, tolerance
+    return "clear", assigned_bin, None, None, tolerance
+
+
+def format_length_borderline_message(
+    measure_name,
+    value,
+    assigned_bin,
+    boundary_side,
+    distance_to_boundary,
+    tolerance_used,
+    bins,
+):
+    """Format advisory text for borderline AR/RS length measurements."""
+    adjacent_bin = get_adjacent_length_bin(assigned_bin, boundary_side, bins)
+    value_text = f"{value:.1f}"
+    distance_text = f"{distance_to_boundary:.1f}"
+    _ = tolerance_used  # classification uses this threshold; no need to display the value.
+
+    if boundary_side == "upper":
+        message = (
+            f"{measure_name} measurement {value_text} mm falls in length bin {assigned_bin} and lies "
+            f"{distance_text} mm below the upper boundary of that bin, which is within the "
+            f"observer-error threshold."
+        )
+        if adjacent_bin is not None:
+            message += (
+                f" Clinical judgement is advised if the adjacent larger size boundary "
+                f"(bin {adjacent_bin}) is being considered."
+            )
+        return message
+
+    message = (
+        f"{measure_name} measurement {value_text} mm falls in length bin {assigned_bin} and lies "
+        f"{distance_text} mm above the lower boundary of that bin, which is within the "
+        f"observer-error threshold."
+    )
+    if adjacent_bin is not None:
+        message += (
+            f" Clinical judgement is advised if the adjacent smaller size boundary "
+            f"(bin {adjacent_bin}) is being considered."
+        )
+    return message
+
+
+def format_length_out_of_range_message(measure_name, value, bins):
+    """Format advisory text for unsupported AR/RS measurements."""
+    bin_items = list(bins.items())
+    if not bin_items:
+        return f"{measure_name} measurement {value:.1f} mm is outside the supported length range and requires clinical review."
+
+    min_val = bin_items[0][1][0]
+    max_val = bin_items[-1][1][1]
+    return (
+        f"{measure_name} measurement {value:.1f} mm is outside the supported length range "
+        f"({min_val:.1f}-{max_val:.1f} mm) and requires clinical review."
+    )
+
+
+def determine_length_with_warning(measure_name, value, bins, tolerance):
+    """Return the assigned length bin together with any advisory warning text."""
+    (
+        status,
+        assigned_bin,
+        boundary_side,
+        distance_to_boundary,
+        tolerance_used,
+    ) = classify_length_measurement(value, bins, tolerance)
+
+    if status == "out_of_range":
+        return None, format_length_out_of_range_message(measure_name, value, bins)
+
+    if status == "borderline" and assigned_bin is not None:
+        return (
+            assigned_bin,
+            format_length_borderline_message(
+                measure_name,
+                value,
+                assigned_bin,
+                boundary_side,
+                distance_to_boundary,
+                tolerance_used,
+                bins,
+            ),
+        )
+
+    return assigned_bin, ""
+
+
 # ---------------- MAIN API FUNCTION ---------------- #
 
 def compute_prosthesis_size(bc, fc, ar, rs):
     width_size, width_warning = determine_width_size(bc, fc)
-    ar_length = determine_length(ar, AR_BINS)
-    rs_length = determine_length(rs, RS_BINS)
+    ar_length, ar_warning = determine_length_with_warning(
+        "AR",
+        ar,
+        AR_BINS,
+        AR_BOUNDARY_TOL,
+    )
+    rs_length, rs_warning = determine_length_with_warning(
+        "RS",
+        rs,
+        RS_BINS,
+        RS_BOUNDARY_TOL,
+    )
+
+    messages = [message for message in [width_warning, ar_warning, rs_warning] if message]
 
     return {
         "width": width_size,
         "humeral_length": ar_length,
         "radial_length": rs_length,
-        "message": width_warning,
+        "message": "\n\n".join(messages),
     }
