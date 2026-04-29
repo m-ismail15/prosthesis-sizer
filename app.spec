@@ -5,7 +5,11 @@ a = Analysis(
     ['app.py'],
     pathex=[],
     binaries=[],
-    datas=[],
+    datas=[
+        ('MedTechBG.png', '.'),
+        ('MedTechLogo.ico', '.'),
+        ('images', 'images'),
+    ],
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},
@@ -35,4 +39,5 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
+    icon=['MedTechLogo.ico'],
 )

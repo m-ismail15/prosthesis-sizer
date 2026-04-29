@@ -5,7 +5,7 @@ from datetime import datetime
 
 from auth_client import is_firebase_auth_configured
 from PyQt6.QtCore import QObject, QElapsedTimer, QRegularExpression, QThread, Qt, QTimer, pyqtSignal
-from PyQt6.QtGui import QColor, QFont, QLinearGradient, QPainter, QPen, QPixmap, QRegularExpressionValidator
+from PyQt6.QtGui import QColor, QFont, QIcon, QLinearGradient, QPainter, QPen, QPixmap, QRegularExpressionValidator
 from PyQt6.QtWidgets import (QAbstractItemView, QApplication, QCheckBox, QComboBox, QHBoxLayout, QHeaderView, QLabel, QLineEdit,
     QMainWindow, QMessageBox, QPushButton, QScrollArea, QSizePolicy, QSplashScreen, QStackedWidget, QTableWidget,
     QTableWidgetItem, QVBoxLayout, QWidget,
@@ -26,6 +26,12 @@ def resource_base_dir() -> str:
 
 def resource_path(relative_path: str) -> str:
     return os.path.join(resource_base_dir(), relative_path)
+
+
+def load_app_icon() -> QIcon:
+    """Load the MedTech window icon from the packaged app resources."""
+    icon = QIcon(resource_path("MedTechLogo.ico"))
+    return icon
 
 
 # ---------------- SPLASH SCREEN ---------------- #
@@ -174,6 +180,9 @@ class LoginWindow(QWidget):
         super().__init__()
         self.setWindowTitle("Login")
         self.setGeometry(300, 200, 420, 240)
+        app_icon = load_app_icon()
+        if not app_icon.isNull():
+            self.setWindowIcon(app_icon)
 
         self.online_store = None
         self.online_error = ""
@@ -325,6 +334,12 @@ class LoginWindow(QWidget):
             )
             return
 
+        if sync_result["failed_count"] == sync_result.get("clinic_mismatch_count", 0):
+            self.main_app.statusBar().showMessage(
+                f"{sync_result['clinic_mismatch_count']} queued offline record(s) belong to a different clinic and remain in the local queue."
+            )
+            return
+
         error_text = "\n".join(sync_result["errors"][:3])
         if len(sync_result["errors"]) > 3:
             error_text += "\n..."
@@ -422,6 +437,9 @@ class ProsthesisApp(QMainWindow):
         self.user_lookup = {}
         self._refresh_window_title()
         self.setGeometry(100, 100, 900, 600)
+        app_icon = load_app_icon()
+        if not app_icon.isNull():
+            self.setWindowIcon(app_icon)
 
         self.stack = QStackedWidget()
         self.setCentralWidget(self.stack)
@@ -561,6 +579,13 @@ class ProsthesisApp(QMainWindow):
             )
             return
 
+        if sync_result["failed_count"] == sync_result.get("clinic_mismatch_count", 0):
+            mismatch_count = sync_result["clinic_mismatch_count"]
+            self.statusBar().showMessage(
+                f"{mismatch_count} queued offline record(s) belong to a different clinic and were not synced."
+            )
+            return
+
         error_text = "\n".join(sync_result["errors"][:3])
         if len(sync_result["errors"]) > 3:
             error_text += "\n..."
@@ -591,11 +616,21 @@ class ProsthesisApp(QMainWindow):
         page = QWidget()
         layout = QVBoxLayout()
 
-        layout.addWidget(QLabel("Enter Patient Measurements:"))
+        header_row = QHBoxLayout()
+        header_label = QLabel("Enter Patient Measurements:")
+        header_row.addWidget(header_label)
+        header_row.addStretch()
 
         self.clear_fields_btn = QPushButton("Clear All Fields")
         self.clear_fields_btn.clicked.connect(self.reset_form)
-        layout.addWidget(self.clear_fields_btn)
+        self.clear_fields_btn.setSizePolicy(
+            QSizePolicy.Policy.Fixed,
+            QSizePolicy.Policy.Fixed,
+        )
+        self.clear_fields_btn.setFixedHeight(30)
+        self.clear_fields_btn.setMaximumWidth(130)
+        header_row.addWidget(self.clear_fields_btn, 0, Qt.AlignmentFlag.AlignRight)
+        layout.addLayout(header_row)
 
         self.name_input = QLineEdit()
         layout.addWidget(QLabel("Patient Name:"))
@@ -632,29 +667,42 @@ class ProsthesisApp(QMainWindow):
         ]:
             field.setValidator(validator)
 
-        layout.addWidget(QLabel("Flexed Bicep Circumference (mm):"))
+        layout.addWidget(QLabel("Affected Side - Flexed Bicep Circumference (mm):"))
         layout.addWidget(self.bicep_input)
 
-        layout.addWidget(QLabel("Flexed Forearm Circumference (mm):"))
+        layout.addWidget(QLabel("Affected Side - Flexed Forearm Circumference (mm):"))
         layout.addWidget(self.forearm_input)
 
-        layout.addWidget(QLabel("AcromioRadiale Length (mm):"))
+        layout.addWidget(QLabel("Affected Side - AcromioRadiale Length (mm):"))
         layout.addWidget(self.humerus_input)
 
-        layout.addWidget(QLabel("RadialeStylion Length (mm):"))
+        layout.addWidget(QLabel("Sound Side - RadialeStylion Length (mm):"))
         layout.addWidget(self.residuum_input)
 
         button_row = QHBoxLayout()
+        button_row.addStretch()
         self.submit_btn = QPushButton("Calculate")
         self.submit_btn.clicked.connect(self.calculate_patient_data)
+        self.submit_btn.setSizePolicy(
+            QSizePolicy.Policy.Fixed,
+            QSizePolicy.Policy.Fixed,
+        )
+        self.submit_btn.setFixedSize(120, 34)
+        submit_font = QFont(self.submit_btn.font())
+        submit_font.setBold(True)
+        self.submit_btn.setFont(submit_font)
         button_row.addWidget(self.submit_btn)
+        button_row.addStretch()
+        layout.addLayout(button_row)
 
+        cancel_row = QHBoxLayout()
+        cancel_row.addStretch()
         self.cancel_edit_btn = QPushButton("Cancel Edit")
         self.cancel_edit_btn.clicked.connect(self.reset_form)
         self.cancel_edit_btn.setVisible(False)
-        button_row.addWidget(self.cancel_edit_btn)
-
-        layout.addLayout(button_row)
+        cancel_row.addWidget(self.cancel_edit_btn)
+        cancel_row.addStretch()
+        layout.addLayout(cancel_row)
 
         page.setLayout(layout)
         return page
@@ -807,18 +855,35 @@ class ProsthesisApp(QMainWindow):
         dialog = QMessageBox(self)
         dialog.setWindowTitle("Sizing Result")
         dialog.setIcon(QMessageBox.Icon.Information)
+        dialog.setTextFormat(Qt.TextFormat.RichText)
         dialog.setText(
-            f"Width: {result['width']}\n"
-            f"Humeral Length: {result['humeral_length']}\n"
-            f"Radial Length: {result['radial_length']}\n\n"
-            f"{result['message']}\n\n"
-            "Save this result?"
+            f"<b>Width: {result['width']}</b><br>"
+            f"<b>Humeral Length: {result['humeral_length']}</b><br>"
+            f"<b>Radial Length: {result['radial_length']}</b>"
         )
+        if result["message"]:
+            dialog.setInformativeText(f"{result['message']}\n\nSave this result?")
+        else:
+            dialog.setInformativeText("Save this result?")
+
+        details_button = None
+        if result.get("details"):
+            details_button = dialog.addButton("See Details", QMessageBox.ButtonRole.ActionRole)
         save_button = dialog.addButton("Save", QMessageBox.ButtonRole.AcceptRole)
         dialog.addButton("Don't Save", QMessageBox.ButtonRole.RejectRole)
-        dialog.exec()
 
-        if dialog.clickedButton() is not save_button:
+        while True:
+            dialog.exec()
+            clicked_button = dialog.clickedButton()
+            if clicked_button is save_button:
+                break
+            if details_button is not None and clicked_button is details_button:
+                details_dialog = QMessageBox(self)
+                details_dialog.setWindowTitle("Sizing Details")
+                details_dialog.setIcon(QMessageBox.Icon.Information)
+                details_dialog.setText(result["details"])
+                details_dialog.exec()
+                continue
             return
 
         try:
@@ -1247,45 +1312,69 @@ class ProsthesisApp(QMainWindow):
     def build_measurement_guide(self):
         scroll = QScrollArea()
         layout = QVBoxLayout()
+        layout.setSpacing(18)
 
         guide = [
             (
                 "Acromion-radiale (AR) Length",
-                "Measure length from acromion to radial head.",
+                "Affected side measurement: Measure length from acromion to radial head.",
                 "images/ARLength.png",
             ),
             (
                 "Bicep Circumference",
-                "Measure max circumference while flexed.",
+                "Affected side measurement: Measure max circumference while flexed.",
                 "images/BCFlexed.png",
             ),
             (
                 "Radiale-Stylion (RS) Length",
-                "Measure length from radial head to styloid process.",
+                "Sound side measurement: Measure length from radial head to styloid process.",
                 "images/RSLength.png",
             ),
             (
                 "Forearm Circumference",
-                "Measure 1/3 distal forearm.",
+                "Affected side measurement: Measure the maximum forearm circumference while flexed.",
                 "images/FCFlexed.png",
             ),
         ]
 
         for title, desc, rel_path in guide:
-            layout.addWidget(QLabel(f"<b>{title}</b>"))
-            layout.addWidget(QLabel(desc))
+            row = QHBoxLayout()
+            row.setSpacing(16)
+
+            text_layout = QVBoxLayout()
+            text_layout.setSpacing(6)
+
+            title_label = QLabel(f"<b>{title}</b>")
+            title_label.setWordWrap(True)
+            text_layout.addWidget(title_label)
+
+            desc_label = QLabel(desc)
+            desc_label.setWordWrap(True)
+            text_layout.addWidget(desc_label)
+            text_layout.addStretch()
 
             abs_path = resource_path(rel_path)
             if os.path.exists(abs_path):
                 pixmap = QPixmap(abs_path)
                 if not pixmap.isNull():
-                    label = QLabel()
-                    label.setPixmap(pixmap.scaledToWidth(300))
-                    layout.addWidget(label)
+                    image_label = QLabel()
+                    image_label.setPixmap(
+                        pixmap.scaledToWidth(
+                            180,
+                            Qt.TransformationMode.SmoothTransformation,
+                        )
+                    )
+                    image_label.setAlignment(
+                        Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft
+                    )
+                    row.addWidget(image_label, 0, Qt.AlignmentFlag.AlignTop)
                 else:
-                    layout.addWidget(QLabel(f"Could not load image: {rel_path}"))
+                    text_layout.addWidget(QLabel(f"Could not load image: {rel_path}"))
             else:
-                layout.addWidget(QLabel(f"Image not found: {rel_path}"))
+                text_layout.addWidget(QLabel(f"Image not found: {rel_path}"))
+
+            row.addLayout(text_layout, 1)
+            layout.addLayout(row)
 
         container = QWidget()
         container.setLayout(layout)
@@ -1297,10 +1386,15 @@ class ProsthesisApp(QMainWindow):
 # ---------------- APPLICATION ENTRY POINT ---------------- #
 if __name__ == "__main__":
     app = QApplication(sys.argv)
+    app_icon = load_app_icon()
+    if not app_icon.isNull():
+        app.setWindowIcon(app_icon)
     splash_timer = QElapsedTimer()
     splash_timer.start()
 
     splash = QSplashScreen(create_splash_pixmap())
+    if not app_icon.isNull():
+        splash.setWindowIcon(app_icon)
     splash.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, True)
     splash.show()
     splash.showMessage(

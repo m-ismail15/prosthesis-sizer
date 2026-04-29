@@ -9,6 +9,7 @@ $ProjectRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $SpecFile = Join-Path $ProjectRoot "app.spec"
 $SourceImagesDir = Join-Path $ProjectRoot "images"
 $SplashBackgroundSource = Join-Path $ProjectRoot "MedTechBG.png"
+$WindowIconSource = Join-Path $ProjectRoot "MedTechLogo.ico"
 $ReadmeSource = Join-Path $ProjectRoot "README.md"
 $InstallGuideSource = Join-Path $ProjectRoot "INSTALL.txt"
 $VersionSource = Join-Path $ProjectRoot "app_version.py"
@@ -18,7 +19,7 @@ $DistDataDir = Join-Path $DistDir "data"
 $DistConfigDir = Join-Path $DistDir "config"
 
 # ---------------- VALIDATION ---------------- #
-foreach ($RequiredPath in @($SpecFile, $SourceImagesDir, $SplashBackgroundSource, $ReadmeSource, $InstallGuideSource, $VersionSource)) {
+foreach ($RequiredPath in @($SpecFile, $SourceImagesDir, $SplashBackgroundSource, $WindowIconSource, $ReadmeSource, $InstallGuideSource, $VersionSource)) {
     if (-not (Test-Path $RequiredPath)) {
         throw "Required build input not found: $RequiredPath"
     }
@@ -59,6 +60,7 @@ New-Item -ItemType Directory -Path $DistConfigDir -Force | Out-Null
 
 Copy-Item (Join-Path $SourceImagesDir "*") $DistImagesDir -Recurse -Force
 Copy-Item $SplashBackgroundSource (Join-Path $DistDir "MedTechBG.png") -Force
+Copy-Item $WindowIconSource (Join-Path $DistDir "MedTechLogo.ico") -Force
 Copy-Item $ReadmeSource (Join-Path $DistDir "README.txt") -Force
 Copy-Item $InstallGuideSource (Join-Path $DistDir "INSTALL.txt") -Force
 

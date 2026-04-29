@@ -218,6 +218,11 @@ def format_borderline_message(
     return message
 
 
+def format_borderline_summary(measure_name):
+    """Format concise summary text for borderline BC/FC measurements."""
+    return f"{measure_name} measurement lies within the variability threshold."
+
+
 # ---------------- WIDTH SIZING LOGIC ---------------- #
 
 def determine_width_size(bc, fc):
@@ -237,7 +242,11 @@ def determine_width_size(bc, fc):
     ) = classify_measurement(fc, FC_BINS, FC_BOUNDARY_TOL)
 
     if bc_status == "out_of_range" or fc_status == "out_of_range":
-        return None, "Width measurement outside the supported anthropometric range. Clinical review required."
+        return (
+            None,
+            "Width measurement outside the supported anthropometric range. Clinical review required.",
+            "",
+        )
 
     bc_bins = find_bins(bc, BC_BINS)
     fc_bins = find_bins(fc, FC_BINS)
@@ -280,11 +289,13 @@ def determine_width_size(bc, fc):
         width_size = larger
 
     if width_size is None:
-        return None, "No valid width bin found."
+        return None, "No valid width bin found.", ""
 
-    advisory_messages = []
+    advisory_summaries = []
+    advisory_details = []
     if bc_status == "borderline" and bc_class_bin is not None:
-        advisory_messages.append(
+        advisory_summaries.append(format_borderline_summary("BC"))
+        advisory_details.append(
             format_borderline_message(
                 "BC",
                 bc,
@@ -295,7 +306,8 @@ def determine_width_size(bc, fc):
             )
         )
     if fc_status == "borderline" and fc_class_bin is not None:
-        advisory_messages.append(
+        advisory_summaries.append(format_borderline_summary("FC"))
+        advisory_details.append(
             format_borderline_message(
                 "FC",
                 fc,
@@ -306,13 +318,22 @@ def determine_width_size(bc, fc):
             )
         )
 
-    messages = []
+    summary_messages = []
+    detail_messages = []
     if compatibility_message:
-        messages.append(compatibility_message)
-    if advisory_messages:
-        messages.append("\n\n".join(advisory_messages))
+        summary_messages.append(compatibility_message)
+        detail_messages.append(compatibility_message)
+    if advisory_summaries:
+        summary_messages.append("\n\n".join(advisory_summaries))
+    if advisory_details:
+        detail_messages.append("\n\n".join(advisory_details))
 
-    return width_size, "\n".join(messages)
+    summary_text = "\n\n".join(summary_messages)
+    detail_text = "\n\n".join(detail_messages)
+    if detail_text == summary_text:
+        detail_text = ""
+
+    return width_size, summary_text, detail_text
 
 
 # ---------------- LENGTH SIZING ---------------- #
@@ -391,8 +412,13 @@ def format_length_borderline_message(
         message += (
             f" Clinical judgement is advised if the adjacent smaller size boundary "
             f"(bin {adjacent_bin}) is being considered."
-        )
+    )
     return message
+
+
+def format_length_borderline_summary(measure_name):
+    """Format concise summary text for borderline AR/RS measurements."""
+    return f"{measure_name} measurement lies within the observer-error threshold."
 
 
 def format_length_out_of_range_message(measure_name, value, bins):
@@ -420,11 +446,12 @@ def determine_length_with_warning(measure_name, value, bins, tolerance):
     ) = classify_length_measurement(value, bins, tolerance)
 
     if status == "out_of_range":
-        return None, format_length_out_of_range_message(measure_name, value, bins)
+        return None, format_length_out_of_range_message(measure_name, value, bins), ""
 
     if status == "borderline" and assigned_bin is not None:
         return (
             assigned_bin,
+            format_length_borderline_summary(measure_name),
             format_length_borderline_message(
                 measure_name,
                 value,
@@ -436,20 +463,20 @@ def determine_length_with_warning(measure_name, value, bins, tolerance):
             ),
         )
 
-    return assigned_bin, ""
+    return assigned_bin, "", ""
 
 
 # ---------------- MAIN API FUNCTION ---------------- #
 
 def compute_prosthesis_size(bc, fc, ar, rs):
-    width_size, width_warning = determine_width_size(bc, fc)
-    ar_length, ar_warning = determine_length_with_warning(
+    width_size, width_warning, width_details = determine_width_size(bc, fc)
+    ar_length, ar_warning, ar_details = determine_length_with_warning(
         "AR",
         ar,
         AR_BINS,
         AR_BOUNDARY_TOL,
     )
-    rs_length, rs_warning = determine_length_with_warning(
+    rs_length, rs_warning, rs_details = determine_length_with_warning(
         "RS",
         rs,
         RS_BINS,
@@ -457,10 +484,12 @@ def compute_prosthesis_size(bc, fc, ar, rs):
     )
 
     messages = [message for message in [width_warning, ar_warning, rs_warning] if message]
+    details = [detail for detail in [width_details, ar_details, rs_details] if detail]
 
     return {
         "width": width_size,
         "humeral_length": ar_length,
         "radial_length": rs_length,
         "message": "\n\n".join(messages),
+        "details": "\n\n".join(details),
     }

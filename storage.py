@@ -544,6 +544,7 @@ class LocalJsonStore:
             "pending_count": len(pending_records),
             "synced_count": 0,
             "failed_count": 0,
+            "clinic_mismatch_count": 0,
             "errors": [],
         }
 
@@ -582,6 +583,7 @@ class LocalJsonStore:
 
             if record_clinic_id != online_clinic_id:
                 result["failed_count"] += 1
+                result["clinic_mismatch_count"] += 1
                 result["errors"].append(
                     f"{record.get('name', 'Unknown')}: clinic_id mismatch "
                     f"(record: {record_clinic_id}, user: {online_clinic_id})."
