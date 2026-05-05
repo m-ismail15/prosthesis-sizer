@@ -483,13 +483,16 @@ def compute_prosthesis_size(bc, fc, ar, rs):
         RS_BOUNDARY_TOL,
     )
 
-    messages = [message for message in [width_warning, ar_warning, rs_warning] if message]
-    details = [detail for detail in [width_details, ar_details, rs_details] if detail]
+    length_warnings = [message for message in [ar_warning, rs_warning] if message]
+    message_groups = [group for group in [width_warning, "\n\n".join(length_warnings)] if group]
+
+    length_details = [detail for detail in [ar_details, rs_details] if detail]
+    detail_groups = [group for group in [width_details, "\n\n".join(length_details)] if group]
 
     return {
         "width": width_size,
         "humeral_length": ar_length,
         "radial_length": rs_length,
-        "message": "\n\n".join(messages),
-        "details": "\n\n".join(details),
+        "message": "\n\n\n".join(message_groups),
+        "details": "\n\n\n".join(detail_groups),
     }

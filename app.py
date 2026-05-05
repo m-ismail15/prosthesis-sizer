@@ -1,4 +1,5 @@
 # Desktop GUI
+import html
 import os
 import sys
 from datetime import datetime
@@ -862,7 +863,8 @@ class ProsthesisApp(QMainWindow):
             f"<b>Radial Length: {result['radial_length']}</b>"
         )
         if result["message"]:
-            dialog.setInformativeText(f"{result['message']}\n\nSave this result?")
+            note_text = html.escape(result["message"]).replace("\n", "<br>")
+            dialog.setInformativeText(f"{note_text}<br><br>Save this result?")
         else:
             dialog.setInformativeText("Save this result?")
 
@@ -1031,7 +1033,21 @@ class ProsthesisApp(QMainWindow):
         self.table.setColumnHidden(0, True)
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
-        self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        header = self.table.horizontalHeader()
+        fixed_column_widths = {
+            1: 160,
+            2: 70,
+            3: 70,
+            4: 80,
+            5: 90,
+            6: 90,
+            7: 150,
+        }
+        for column, width in fixed_column_widths.items():
+            header.setSectionResizeMode(column, QHeaderView.ResizeMode.Fixed)
+            self.table.setColumnWidth(column, width)
+        header.setSectionResizeMode(8, QHeaderView.ResizeMode.Stretch)
+        self.table.cellDoubleClicked.connect(self.show_record_note)
 
         layout.addLayout(search_layout)
         layout.addWidget(self.table)
@@ -1098,6 +1114,17 @@ class ProsthesisApp(QMainWindow):
             self.table.setItem(
                 row_index, 8, QTableWidgetItem(note_text)
             )
+
+    def show_record_note(self, row_index: int, column_index: int):
+        if column_index != 8:
+            return
+
+        note_item = self.table.item(row_index, 8)
+        note_text = note_item.text().strip() if note_item is not None else ""
+        if not note_text:
+            note_text = "None"
+
+        QMessageBox.information(self, "Record Note", note_text)
 
     def _format_record_timestamp(self, data: dict) -> str:
         timestamp_value = data.get("updated_at") or data.get("created_at")
@@ -1360,7 +1387,7 @@ class ProsthesisApp(QMainWindow):
                     image_label = QLabel()
                     image_label.setPixmap(
                         pixmap.scaledToWidth(
-                            180,
+                            150,
                             Qt.TransformationMode.SmoothTransformation,
                         )
                     )
